@@ -1,0 +1,12 @@
+underdog_analytics:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DBT_HOST', 'db') }}"
+      user: postgres
+      pass: postgres
+      port: "{{ env_var('DBT_PORT', '5432') | as_number }}"
+      dbname: analytical_sandbox
+      schema: public
+      threads: 4

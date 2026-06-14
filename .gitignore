@@ -1,0 +1,31 @@
+# Python caching
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.ipynb_checkpoints/
+.pytensor/
+
+# Virtual environment
+venv/
+.env
+
+# MLflow tracking and SQLite
+mlruns/
+mlflow.db
+model_summary.csv
+
+# dbt artifacts
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# Airflow and project logs
+logs/
+airflow/logs/
+*.log
+
+# Raw and local data directories
+data/
+minio_data/
