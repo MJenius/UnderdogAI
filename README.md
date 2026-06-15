@@ -32,22 +32,14 @@ Decision Intelligence and Predictive Football Analytics Platform designed to ide
 UnderdogAI is built on a modular data-to-decision architecture combining streaming event meshes, Bayesian statistics, and causal inference. The diagram below illustrates how raw landing-zone datasets transition into feature stores, feed model training pipelines, and power real-time REST and gRPC endpoints.
 
 ```mermaid
+%%{init: {'theme': 'neutral'}}%%
 graph TD
-    %% Styling
-    classDef datasource fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef storage fill:#bbf,stroke:#333,stroke-width:2px;
-    classDef orchestrator fill:#f96,stroke:#333,stroke-width:2px;
-    classDef transform fill:#dfd,stroke:#333,stroke-width:2px;
-    classDef model fill:#ffd2cf,stroke:#333,stroke-width:2px;
-    classDef api fill:#e1f5fe,stroke:#333,stroke-width:2px;
-    classDef streaming fill:#fff9c4,stroke:#333,stroke-width:2px;
-
     %% Data Sources & Ingestion
     subgraph Ingestion ["Data Ingestion and ELT"]
-        CSV["Raw CSV Data (landing)"]:::datasource
-        MinIO["MinIO S3 Object Storage (Port 9000/9001)"]:::storage
-        Airflow["Apache Airflow DAG (Port 8080)"]:::orchestrator
-        PostgresRaw["PostgreSQL raw tables (Port 5433)"]:::storage
+        CSV["Raw CSV Data (landing)"]
+        MinIO["MinIO S3 Object Storage (Port 9000/9001)"]
+        Airflow["Apache Airflow DAG (Port 8080)"]
+        PostgresRaw["PostgreSQL raw tables (Port 5433)"]
         
         CSV --> MinIO
         Airflow --> MinIO
@@ -56,8 +48,8 @@ graph TD
 
     %% Transformations
     subgraph Transformation ["Analytics Engineering (dbt)"]
-        dbt["dbt Core Models"]:::transform
-        PostgresMart["PostgreSQL fct_underdog_feature_mart"]:::storage
+        dbt["dbt Core Models"]
+        PostgresMart["PostgreSQL fct_underdog_feature_mart"]
         
         PostgresRaw --> dbt
         dbt --> PostgresMart
@@ -65,10 +57,10 @@ graph TD
 
     %% Intelligence & Models
     subgraph Intelligence ["Decision Intelligence Core"]
-        Bayesian["Bayesian Match Engine (PyMC Poisson Model)"]:::model
-        Causal["Causal Inference Engine (DoWhy Preparation Effect)"]:::model
-        MLflow["MLflow Tracking (SQLite and mlruns)"]:::storage
-        ModelCSV["model_summary.csv (Latest Parameters)"]:::storage
+        Bayesian["Bayesian Match Engine (PyMC Poisson Model)"]
+        Causal["Causal Inference Engine (DoWhy Preparation Effect)"]
+        MLflow["MLflow Tracking (SQLite and mlruns)"]
+        ModelCSV["model_summary.csv (Latest Parameters)"]
         
         PostgresMart --> Bayesian
         PostgresMart --> Causal
@@ -79,10 +71,10 @@ graph TD
 
     %% Microservices Layer
     subgraph Microservices ["Microservices Layer"]
-        FastAPI["FastAPI / gRPC Gateway (REST Port 8000, gRPC Port 50051)"]:::api
-        Kafka["Apache Kafka (Topic: underdog_simulation_tasks)"]:::streaming
-        Worker["Simulation Worker (Kafka Consumer)"]:::api
-        Redis["Redis Cache (Task Status and Results)"]:::storage
+        FastAPI["FastAPI / gRPC Gateway (REST Port 8000, gRPC Port 50051)"]
+        Kafka["Apache Kafka (Topic: underdog_simulation_tasks)"]
+        Worker["Simulation Worker (Kafka Consumer)"]
+        Redis["Redis Cache (Task Status and Results)"]
         
         FastAPI --> ModelCSV
         FastAPI --> Kafka
@@ -117,8 +109,15 @@ graph TD
 
 ### 3. Decision Intelligence Core
 * **Bayesian Match Simulation**: Constructed in PyMC ([`bayesian_match_engine.py`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/src/models/bayesian_match_engine.py)). Models match score outcomes as independent Poisson processes where goals are determined by:
-  $$\lambda_{\text{home}} = \exp(\text{intercept} + \text{home\_adv} + \theta_{\text{home}} - \theta_{\text{away}} + \beta_{\text{diff}}\Delta\text{Rank} + \beta_{\text{vel}}\text{Vel}_{\text{home}} + \beta_{\text{vol}}\text{Vol}_{\text{home}})$$
-  $$\lambda_{\text{away}} = \exp(\text{intercept} + \theta_{\text{away}} - \theta_{\text{home}} - \beta_{\text{diff}}\Delta\text{Rank} + \beta_{\text{vel}}\text{Vel}_{\text{away}} + \beta_{\text{vol}}\text{Vol}_{\text{away}})$$
+  
+  $$
+  \lambda_{\text{home}} = \exp(\text{intercept} + \text{home\_adv} + \theta_{\text{home}} - \theta_{\text{away}} + \beta_{\text{diff}}\Delta\text{Rank} + \beta_{\text{vel}}\text{Vel}_{\text{home}} + \beta_{\text{vol}}\text{Vol}_{\text{home}})
+  $$
+  
+  $$
+  \lambda_{\text{away}} = \exp(\text{intercept} + \theta_{\text{away}} - \theta_{\text{home}} - \beta_{\text{diff}}\Delta\text{Rank} + \beta_{\text{vel}}\text{Vel}_{\text{away}} + \beta_{\text{vol}}\text{Vol}_{\text{away}})
+  $$
+  
   The model estimates latent team strengths ($\theta$) and regression coefficients using MCMC sampling. Experiment logs, Brier score calibration, log loss, and serialized parameters (`model_summary.csv`) are uploaded to MLflow.
 * **Causal Inference Analysis**: Implemented via Microsoft's DoWhy ([`causal_inference_engine.py`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/src/models/causal_inference_engine.py)). Isolates the Average Treatment Effect (ATE) of high team preparation (treatment defined as friendly match point velocity $\ge 1.5$ over the 2 years leading to a tournament) on World Cup match wins, controlling for confounding variables like team rank, opponent rank, and historical volatility. Establishes statistical validity through Placebo Treatment and Random Common Cause refutation.
 
