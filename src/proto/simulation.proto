@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package simulation;
+
+message MatchPredictionRequest {
+  string home_team = 1;
+  string away_team = 2;
+  string tournament_date = 3;
+}
+
+message MatchPredictionResponse {
+  float home_win_prob = 1;
+  float away_win_prob = 2;
+  float draw_prob = 3;
+  float underdog_signal_score = 4;
+}
+
+message TournamentSimulationRequest {
+  int32 tournament_year = 1;
+  int32 simulation_runs = 2;
+}
+
+message SimulationTaskStatus {
+  string task_id = 1;
+  string status = 2;
+  string redis_key = 3;
+}
+
+service SimulationService {
+  rpc PredictMatch(MatchPredictionRequest) returns (MatchPredictionResponse);
+  rpc SimulateTournament(TournamentSimulationRequest) returns (SimulationTaskStatus);
+}
