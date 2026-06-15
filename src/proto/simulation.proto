@@ -24,6 +24,7 @@ message SimulationTaskStatus {
   string task_id = 1;
   string status = 2;
   string redis_key = 3;
+  float progress = 4;
 }
 
 service SimulationService {

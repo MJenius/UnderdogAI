@@ -33,6 +33,7 @@ export default function Home() {
   const [simStatus, setSimStatus] = useState<string | null>(null);
   const [simResults, setSimResults] = useState<Record<string, number> | null>(null);
   const [simLoading, setSimLoading] = useState<boolean>(false);
+  const [simProgress, setSimProgress] = useState<number>(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -110,6 +111,7 @@ export default function Home() {
     setSimLoading(true);
     setSimStatus("PENDING");
     setSimResults(null);
+    setSimProgress(0);
     setSimTaskId(null);
     setErrorMsg(null);
     try {
@@ -145,9 +147,13 @@ export default function Home() {
           throw new Error("Connection dropped");
         }
         const data = await res.json();
+        if (data.progress !== undefined) {
+          setSimProgress(parseFloat(String(data.progress)));
+        }
         if (data.status === "COMPLETED") {
           setSimStatus("COMPLETED");
           setSimResults(data.result);
+          setSimProgress(100);
           setSimLoading(false);
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
@@ -179,26 +185,78 @@ export default function Home() {
     };
   }, []);
 
-  const getTeamFeature = (teamName: string) => {
-    return darkHorses.find((d) => d.team === teamName);
-  };
+  const [homeFeats, setHomeFeats] = useState<any>(null);
+  const [awayFeats, setAwayFeats] = useState<any>(null);
 
-  const homeFeats = getTeamFeature(homeTeam);
-  const awayFeats = getTeamFeature(awayTeam);
+  useEffect(() => {
+    if (homeTeam) {
+      fetch(`/api/features?team=${encodeURIComponent(homeTeam)}&year=${selectedYear}`)
+        .then((res) => {
+          if (!res.ok) throw new Error();
+          return res.json();
+        })
+        .then((data) => {
+          setHomeFeats({
+            team: homeTeam,
+            rank: parseInt(String(data.rank), 10) || 100,
+            velocity: parseFloat(String(data.vel)) || 0.0,
+            volatility: parseFloat(String(data.vol)) || 0.0,
+            underdog_score: parseFloat(String(data.underdog_score)) || 0.0,
+          });
+        })
+        .catch(() => {
+          setHomeFeats(null);
+        });
+    } else {
+      setHomeFeats(null);
+    }
+  }, [homeTeam, selectedYear]);
+
+  useEffect(() => {
+    if (awayTeam) {
+      fetch(`/api/features?team=${encodeURIComponent(awayTeam)}&year=${selectedYear}`)
+        .then((res) => {
+          if (!res.ok) throw new Error();
+          return res.json();
+        })
+        .then((data) => {
+          setAwayFeats({
+            team: awayTeam,
+            rank: parseInt(String(data.rank), 10) || 100,
+            velocity: parseFloat(String(data.vel)) || 0.0,
+            volatility: parseFloat(String(data.vol)) || 0.0,
+            underdog_score: parseFloat(String(data.underdog_score)) || 0.0,
+          });
+        })
+        .catch(() => {
+          setAwayFeats(null);
+        });
+    } else {
+      setAwayFeats(null);
+    }
+  }, [awayTeam, selectedYear]);
+
+  const homeRank = homeFeats ? homeFeats.rank : 100;
+  const homeVelocity = homeFeats ? homeFeats.velocity : 0.0;
+  const awayRank = awayFeats ? awayFeats.rank : 100;
+  const awayVelocity = awayFeats ? awayFeats.velocity : 0.0;
 
   const getUpsetRisk = () => {
-    if (!prediction || !homeFeats || !awayFeats) return 0;
-    if (homeFeats.rank > awayFeats.rank) {
-      return prediction.home_win_prob;
-    } else if (awayFeats.rank > homeFeats.rank) {
-      return prediction.away_win_prob;
+    if (!prediction || !homeFeats || !awayFeats) return 0.0;
+    const homeWinProb = parseFloat(String(prediction.home_win_prob)) || 0.0;
+    const awayWinProb = parseFloat(String(prediction.away_win_prob)) || 0.0;
+    const drawProb = parseFloat(String(prediction.draw_prob)) || 0.0;
+    if (homeRank > awayRank) {
+      return homeWinProb + drawProb;
+    } else if (awayRank > homeRank) {
+      return awayWinProb + drawProb;
     }
-    return prediction.draw_prob;
+    return drawProb;
   };
 
   const upsetRisk = getUpsetRisk();
-  const strongerTeamName = homeFeats && awayFeats ? (homeFeats.rank < awayFeats.rank ? homeTeam : awayTeam) : "";
-  const underdogTeamName = homeFeats && awayFeats ? (homeFeats.rank > awayFeats.rank ? homeTeam : awayTeam) : "";
+  const strongerTeamName = homeFeats && awayFeats ? (homeRank < awayRank ? homeTeam : awayTeam) : "";
+  const underdogTeamName = homeFeats && awayFeats ? (homeRank > awayRank ? homeTeam : awayTeam) : "";
 
   return (
     <div className="flex flex-col min-h-screen bg-zinc-950 text-zinc-100 font-sans antialiased">
@@ -396,15 +454,15 @@ export default function Home() {
                       {homeFeats && (
                         <div className="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-3 flex flex-col gap-1.5">
                           <div className="text-xs font-bold text-zinc-300 truncate">{homeTeam}</div>
-                          <div className="text-xs text-zinc-500">Rank: <span className="text-zinc-300 font-semibold">{homeFeats.rank}</span></div>
-                          <div className="text-xs text-zinc-500">Velocity: <span className="text-zinc-300 font-semibold">{Number(homeFeats.velocity).toFixed(2)}</span></div>
+                          <div className="text-xs text-zinc-500">Rank: <span className="text-zinc-300 font-semibold">{homeRank}</span></div>
+                          <div className="text-xs text-zinc-500">Velocity: <span className="text-zinc-300 font-semibold">{homeVelocity.toFixed(2)}</span></div>
                         </div>
                       )}
                       {awayFeats && (
                         <div className="bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-3 flex flex-col gap-1.5">
                           <div className="text-xs font-bold text-zinc-300 truncate">{awayTeam}</div>
-                          <div className="text-xs text-zinc-500">Rank: <span className="text-zinc-300 font-semibold">{awayFeats.rank}</span></div>
-                          <div className="text-xs text-zinc-500">Velocity: <span className="text-zinc-300 font-semibold">{Number(awayFeats.velocity).toFixed(2)}</span></div>
+                          <div className="text-xs text-zinc-500">Rank: <span className="text-zinc-300 font-semibold">{awayRank}</span></div>
+                          <div className="text-xs text-zinc-500">Velocity: <span className="text-zinc-300 font-semibold">{awayVelocity.toFixed(2)}</span></div>
                         </div>
                       )}
                     </div>
@@ -419,26 +477,26 @@ export default function Home() {
                         <div className="flex flex-col gap-4">
                           <div className="flex justify-between items-center text-sm">
                             <span className="font-semibold text-zinc-300">{homeTeam} Win</span>
-                            <span className="font-bold text-white">{(prediction.home_win_prob * 100).toFixed(1)}%</span>
+                            <span className="font-bold text-white">{(parseFloat(String(prediction.home_win_prob)) * 100).toFixed(1)}%</span>
                           </div>
                           <div className="w-full bg-zinc-900 h-3 rounded-full overflow-hidden border border-zinc-800">
-                            <div className="bg-indigo-500 h-full rounded-full transition-all duration-500" style={{ width: `${prediction.home_win_prob * 100}%` }}></div>
+                            <div className="bg-indigo-500 h-full rounded-full transition-all duration-500" style={{ width: `${parseFloat(String(prediction.home_win_prob)) * 100}%` }}></div>
                           </div>
 
                           <div className="flex justify-between items-center text-sm mt-2">
                             <span className="font-semibold text-zinc-300">Draw</span>
-                            <span className="font-bold text-white">{(prediction.draw_prob * 100).toFixed(1)}%</span>
+                            <span className="font-bold text-white">{(parseFloat(String(prediction.draw_prob)) * 100).toFixed(1)}%</span>
                           </div>
                           <div className="w-full bg-zinc-900 h-3 rounded-full overflow-hidden border border-zinc-800">
-                            <div className="bg-zinc-600 h-full rounded-full transition-all duration-500" style={{ width: `${prediction.draw_prob * 100}%` }}></div>
+                            <div className="bg-zinc-600 h-full rounded-full transition-all duration-500" style={{ width: `${parseFloat(String(prediction.draw_prob)) * 100}%` }}></div>
                           </div>
 
                           <div className="flex justify-between items-center text-sm mt-2">
                             <span className="font-semibold text-zinc-300">{awayTeam} Win</span>
-                            <span className="font-bold text-white">{(prediction.away_win_prob * 100).toFixed(1)}%</span>
+                            <span className="font-bold text-white">{(parseFloat(String(prediction.away_win_prob)) * 100).toFixed(1)}%</span>
                           </div>
                           <div className="w-full bg-zinc-900 h-3 rounded-full overflow-hidden border border-zinc-800">
-                            <div className="bg-violet-500 h-full rounded-full transition-all duration-500" style={{ width: `${prediction.away_win_prob * 100}%` }}></div>
+                            <div className="bg-violet-500 h-full rounded-full transition-all duration-500" style={{ width: `${parseFloat(String(prediction.away_win_prob)) * 100}%` }}></div>
                           </div>
                         </div>
                       </div>
@@ -453,12 +511,16 @@ export default function Home() {
                             Upset Probability Matrix
                           </h4>
                           <p className="text-zinc-400 text-sm mt-1 max-w-md">
-                            {homeFeats && awayFeats && homeFeats.rank === awayFeats.rank ? (
-                              <span>Both teams share equal baseline rankings. The probability of an upset inversion is tied directly to the draw output.</span>
+                            {homeFeats && awayFeats ? (
+                              homeRank === awayRank ? (
+                                <span>Both teams share equal baseline rankings. The probability of an upset inversion is tied directly to the draw output.</span>
+                              ) : (
+                                <span>
+                                  There is a <strong>{(upsetRisk * 100).toFixed(1)}%</strong> chance that <strong>{underdogTeamName}</strong> (FIFA rank #{underdogTeamName === homeTeam ? homeRank : awayRank}) defeats <strong>{strongerTeamName}</strong> (FIFA rank #{strongerTeamName === homeTeam ? homeRank : awayRank}) using pre-tournament Bayesian priors.
+                                </span>
+                              )
                             ) : (
-                              <span>
-                                There is a <strong>{(upsetRisk * 100).toFixed(1)}%</strong> chance that <strong>{underdogTeamName}</strong> (FIFA rank #{getTeamFeature(underdogTeamName)?.rank}) defeats <strong>{strongerTeamName}</strong> (FIFA rank #{getTeamFeature(strongerTeamName)?.rank}) using pre-tournament Bayesian priors.
-                              </span>
+                              <span>Loading team priors...</span>
                             )}
                           </p>
                         </div>
@@ -541,9 +603,17 @@ export default function Home() {
 
                 <div className="lg:col-span-2 border border-zinc-800 bg-zinc-900/10 rounded-2xl p-6">
                   {simLoading ? (
-                    <div className="flex flex-col items-center justify-center py-20 gap-4">
-                      <RefreshCw className="h-8 w-8 text-indigo-500 animate-spin" />
-                      <div className="text-sm font-semibold text-zinc-400">Queueing task onto Kafka event stream...</div>
+                    <div className="flex flex-col items-center justify-center py-20 gap-6">
+                      <div className="flex flex-col items-center gap-4 w-full max-w-md">
+                        <div className="text-sm font-semibold text-zinc-300">Processing simulation runs on background workers...</div>
+                        <div className="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden relative">
+                          <div
+                            className="bg-indigo-500 h-full rounded-full transition-all duration-300 ease-out"
+                            style={{ width: `${simProgress}%` }}
+                          ></div>
+                        </div>
+                        <div className="text-xs text-zinc-400 font-medium">{simProgress.toFixed(0)}% Complete</div>
+                      </div>
                     </div>
                   ) : simResults ? (
                     <div className="flex flex-col gap-6">
