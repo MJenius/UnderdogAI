@@ -140,6 +140,7 @@ graph TD
 │   ├── models/         # SQL staging, intermediate, and analytics mart models
 │   ├── dbt_project.yml # dbt configuration parameters
 │   └── profiles.yml    # Database credential mapping for dbt CLI
+├── frontend/           # Next.js App Router client wrapper interface
 ├── mlruns/             # MLflow run executions, parameters, and metadata storage
 ├── src/                # Core Application codebase
 │   ├── api/            # Gateway controller exposing REST and gRPC servers
@@ -150,6 +151,7 @@ graph TD
 ├── docker-compose.yml  # Local stack configuration (PostgreSQL, Kafka, Redis, MinIO, Airflow)
 └── CLAUDE.md           # Quick commands guide and styling instructions
 ```
+
 
 ---
 
@@ -166,6 +168,8 @@ The docker environment spins up local emulators representing production cloud co
 | **MinIO API** | `9000` | `9000` | S3 Emulator bucket interface |
 | **Redis** | `6379` | `6379` | Simulation task status cache |
 | **Apache Kafka** | `9092` | `9092` | Asynchronous task streaming |
+| **Next.js Frontend** | `3000` | `3000` | Local-first decision intelligence client interface |
+
 
 ---
 
@@ -249,6 +253,15 @@ This materializes `fct_underdog_feature_mart` inside the `analytical_sandbox` da
    python src/workers/simulation_worker.py
    ```
    *Consumes Kafka event requests, runs Monte Carlo knock-outs, and registers outcomes to Redis.*
+
+### Step 6: Start the Frontend Interface
+Open a separate terminal window, navigate to the frontend directory, install standard node modules, and run the Next.js development server:
+```bash
+cd frontend
+npm install --legacy-peer-deps
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) to access the interactive UnderdogAI Client Dashboard, which binds to the API gateway proxies and Postgres data layer.
 
 ---
 

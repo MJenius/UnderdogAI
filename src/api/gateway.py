@@ -70,20 +70,36 @@ def get_db_connection():
         password=os.getenv("POSTGRES_PASSWORD", "postgres")
     )
 
-def get_team_features(conn, team_name):
-    query = """
-        SELECT 
-            CASE WHEN home_team = %s THEN home_rank ELSE away_rank END as rank,
-            CASE WHEN home_team = %s THEN home_rolling_point_velocity_5 ELSE away_rolling_point_velocity_5 END as velocity,
-            CASE WHEN home_team = %s THEN home_rank_volatility_12m ELSE away_rank_volatility_12m END as volatility,
-            CASE WHEN home_team = %s THEN home_underdog_signal_score ELSE away_underdog_signal_score END as underdog_score
-        FROM fct_underdog_feature_mart
-        WHERE home_team = %s OR away_team = %s
-        ORDER BY match_date DESC
-        LIMIT 1
-    """
+def get_team_features(conn, team_name, year=None):
+    if year is not None:
+        query = """
+            SELECT 
+                CASE WHEN home_team = %s THEN home_rank ELSE away_rank END as rank,
+                CASE WHEN home_team = %s THEN home_rolling_point_velocity_5 ELSE away_rolling_point_velocity_5 END as velocity,
+                CASE WHEN home_team = %s THEN home_rank_volatility_12m ELSE away_rank_volatility_12m END as volatility,
+                CASE WHEN home_team = %s THEN home_underdog_signal_score ELSE away_underdog_signal_score END as underdog_score
+            FROM fct_underdog_feature_mart
+            WHERE (home_team = %s OR away_team = %s)
+              AND match_date < MAKE_DATE(%s, 1, 1)
+            ORDER BY match_date DESC
+            LIMIT 1
+        """
+        params = (team_name, team_name, team_name, team_name, team_name, team_name, int(year))
+    else:
+        query = """
+            SELECT 
+                CASE WHEN home_team = %s THEN home_rank ELSE away_rank END as rank,
+                CASE WHEN home_team = %s THEN home_rolling_point_velocity_5 ELSE away_rolling_point_velocity_5 END as velocity,
+                CASE WHEN home_team = %s THEN home_rank_volatility_12m ELSE away_rank_volatility_12m END as volatility,
+                CASE WHEN home_team = %s THEN home_underdog_signal_score ELSE away_underdog_signal_score END as underdog_score
+            FROM fct_underdog_feature_mart
+            WHERE home_team = %s OR away_team = %s
+            ORDER BY match_date DESC
+            LIMIT 1
+        """
+        params = (team_name, team_name, team_name, team_name, team_name, team_name)
     with conn.cursor() as cur:
-        cur.execute(query, (team_name, team_name, team_name, team_name, team_name, team_name))
+        cur.execute(query, params)
         row = cur.fetchone()
         if row:
             return {
@@ -99,12 +115,12 @@ def poisson_pmf(k, lam):
         return 1.0 if k == 0 else 0.0
     return (lam**k * math.exp(-lam)) / math.factorial(k)
 
-def compute_probabilities(home_team, away_team):
+def compute_probabilities(home_team, away_team, year=None):
     intercept, home_adv, beta_diff, beta_vel, beta_vol, beta_rank_prior, team_strengths = get_latest_model_params()
     conn = get_db_connection()
     try:
-        home_feats = get_team_features(conn, home_team)
-        away_feats = get_team_features(conn, away_team)
+        home_feats = get_team_features(conn, home_team, year)
+        away_feats = get_team_features(conn, away_team, year)
     finally:
         conn.close()
     
@@ -151,9 +167,9 @@ def compute_probabilities(home_team, away_team):
     return home_win, away_win, draw, underdog_score
 
 @app.get("/api/v1/predict")
-def predict_endpoint(home: str, away: str):
+def predict_endpoint(home: str, away: str, year: int = None):
     try:
-        home_win, away_win, draw, underdog_score = compute_probabilities(home, away)
+        home_win, away_win, draw, underdog_score = compute_probabilities(home, away, year)
         return {
             "home_win_prob": home_win,
             "away_win_prob": away_win,
