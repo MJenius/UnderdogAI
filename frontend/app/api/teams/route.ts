@@ -62,9 +62,10 @@ export async function GET(request: Request) {
       const query = `
         SELECT DISTINCT country_full AS team
         FROM public.raw_fifa_rankings
-        WHERE rank_date = COALESCE(
-            (SELECT MAX(rank_date) FROM public.raw_fifa_rankings WHERE rank_date <= MAKE_DATE($1, 1, 1)),
-            (SELECT MIN(rank_date) FROM public.raw_fifa_rankings)
+        WHERE rank_date = (
+            SELECT MAX(rank_date)
+            FROM public.raw_fifa_rankings
+            WHERE rank_date <= MAKE_DATE($1, 1, 1)
         )
         ORDER BY team ASC;
       `;
@@ -78,5 +79,3 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 }
-
-

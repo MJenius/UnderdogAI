@@ -13,11 +13,17 @@ message MatchPredictionResponse {
   float away_win_prob = 2;
   float draw_prob = 3;
   float underdog_signal_score = 4;
+  string risk_label = 5;
+  string explainability_narrative = 6;
+  float home_tier_form = 7;
+  float away_tier_form = 8;
+  float h2h_bias = 9;
 }
 
 message TournamentSimulationRequest {
   int32 tournament_year = 1;
   int32 simulation_runs = 2;
+  string progression_mode = 3;
 }
 
 message SimulationTaskStatus {
@@ -27,7 +33,28 @@ message SimulationTaskStatus {
   float progress = 4;
 }
 
+message FixtureRequest {
+  int32 tournament_year = 1;
+}
+
+message TournamentFixture {
+  string home_team = 1;
+  string away_team = 2;
+  string match_date = 3;
+  float home_win_prob = 4;
+  float away_win_prob = 5;
+  float draw_prob = 6;
+  float upset_probability = 7;
+  string risk_label = 8;
+  string explainability_narrative = 9;
+}
+
+message FixtureListResponse {
+  repeated TournamentFixture fixtures = 1;
+}
+
 service SimulationService {
   rpc PredictMatch(MatchPredictionRequest) returns (MatchPredictionResponse);
   rpc SimulateTournament(TournamentSimulationRequest) returns (SimulationTaskStatus);
+  rpc GetFixtures(FixtureRequest) returns (FixtureListResponse);
 }

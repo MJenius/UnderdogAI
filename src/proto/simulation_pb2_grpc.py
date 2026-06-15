@@ -43,6 +43,11 @@ class SimulationServiceStub:
                 request_serializer=simulation__pb2.TournamentSimulationRequest.SerializeToString,
                 response_deserializer=simulation__pb2.SimulationTaskStatus.FromString,
                 _registered_method=True)
+        self.GetFixtures = channel.unary_unary(
+                '/simulation.SimulationService/GetFixtures',
+                request_serializer=simulation__pb2.FixtureRequest.SerializeToString,
+                response_deserializer=simulation__pb2.FixtureListResponse.FromString,
+                _registered_method=True)
 
 
 class SimulationServiceServicer:
@@ -60,6 +65,12 @@ class SimulationServiceServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetFixtures(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_SimulationServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -72,6 +83,11 @@ def add_SimulationServiceServicer_to_server(servicer, server):
                     servicer.SimulateTournament,
                     request_deserializer=simulation__pb2.TournamentSimulationRequest.FromString,
                     response_serializer=simulation__pb2.SimulationTaskStatus.SerializeToString,
+            ),
+            'GetFixtures': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetFixtures,
+                    request_deserializer=simulation__pb2.FixtureRequest.FromString,
+                    response_serializer=simulation__pb2.FixtureListResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -127,6 +143,33 @@ class SimulationService:
             '/simulation.SimulationService/SimulateTournament',
             simulation__pb2.TournamentSimulationRequest.SerializeToString,
             simulation__pb2.SimulationTaskStatus.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetFixtures(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/simulation.SimulationService/GetFixtures',
+            simulation__pb2.FixtureRequest.SerializeToString,
+            simulation__pb2.FixtureListResponse.FromString,
             options,
             channel_credentials,
             insecure,
