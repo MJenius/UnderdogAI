@@ -29,3 +29,9 @@ airflow/logs/
 # Raw and local data directories
 data/
 minio_data/
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+
