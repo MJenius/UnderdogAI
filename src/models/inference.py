@@ -115,21 +115,21 @@ def get_fifa_rankings_name(name):
 
 def get_tier_from_rank(rank):
     if rank <= 15:
-        return "Elite"
+        return "elite"
     elif rank <= 45:
-        return "Competitive"
+        return "established"
     elif rank <= 80:
-        return "Mid-Tier"
+        return "rising"
     else:
-        return "Developing"
+        return "emerging"
 
 def get_tier_similarity_features(conn, team_name, opponent_tier, year=None):
     std_name = get_standard_team_name(team_name)
-    if opponent_tier == "Elite":
+    if opponent_tier == "elite":
         min_rank, max_rank = 1, 15
-    elif opponent_tier == "Competitive":
+    elif opponent_tier == "established":
         min_rank, max_rank = 16, 45
-    elif opponent_tier == "Mid-Tier":
+    elif opponent_tier == "rising":
         min_rank, max_rank = 46, 80
     else:
         min_rank, max_rank = 81, 9999
@@ -512,10 +512,10 @@ def precompute_tier_similarity(conn, teams, year):
     std_teams = [get_standard_team_name(t) for t in teams]
     for t in std_teams:
         tier_similarity[t] = {
-            "Elite": {"vel": 1.0, "gm": 0.0},
-            "Competitive": {"vel": 1.0, "gm": 0.0},
-            "Mid-Tier": {"vel": 1.0, "gm": 0.0},
-            "Developing": {"vel": 1.0, "gm": 0.0}
+            "elite": {"vel": 1.0, "gm": 0.0},
+            "established": {"vel": 1.0, "gm": 0.0},
+            "rising": {"vel": 1.0, "gm": 0.0},
+            "emerging": {"vel": 1.0, "gm": 0.0}
         }
     if not teams:
         return tier_similarity
