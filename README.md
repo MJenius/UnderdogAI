@@ -6,24 +6,32 @@ Decision Intelligence and Predictive Football Analytics Platform designed to ide
 
 ## Table of Contents
 1. [System Architecture](#system-architecture)
-2. [Platform Components](#platform-components)
+2. [Key Design Decisions](#key-design-decisions)
+3. [Platform Components](#platform-components)
     - [Data Ingestion & ELT](#1-data-ingestion--elt)
     - [Analytics Engineering (dbt)](#2-analytics-engineering-dbt)
     - [Decision Intelligence Core](#3-decision-intelligence-core)
     - [Microservices Layer](#4-microservices-layer)
-3. [Repository Directory Structure](#repository-directory-structure)
-4. [Local Emulation Infrastructure](#local-emulation-infrastructure)
-5. [Step-by-Step Execution Guide](#step-by-step-execution-guide)
+4. [Event-Driven Architecture](#event-driven-architecture)
+5. [Analytics Layer](#analytics-layer)
+6. [Repository Directory Structure](#repository-directory-structure)
+7. [Local Emulation Infrastructure](#local-emulation-infrastructure)
+8. [Containerization](#containerization)
+9. [Kubernetes Deployment (Local)](#kubernetes-deployment-local)
+10. [CI/CD Pipeline](#cicd-pipeline)
+11. [Observability & Structured Logging](#observability--structured-logging)
+12. [Step-by-Step Execution Guide](#step-by-step-execution-guide)
     - [Prerequisites](#prerequisites)
     - [Step 1: Start Emulated Infrastructure](#step-1-start-emulated-infrastructure)
     - [Step 2: Run Data Ingestion (Airflow)](#step-2-run-data-ingestion-airflow)
     - [Step 3: Run Transformations (dbt)](#step-3-run-transformations-dbt)
     - [Step 4: Train Bayesian & Causal Models](#step-4-train-bayesian--causal-models)
     - [Step 5: Spin up Gateway & Workers](#step-5-spin-up-gateway--workers)
-6. [API Usage & Verification](#api-usage--verification)
+13. [API Usage & Verification](#api-usage--verification)
     - [REST Gateway endpoints](#rest-gateway-endpoints)
     - [gRPC Services](#grpc-services)
-7. [Cloud Deployment Mechanics (Terraform)](#cloud-deployment-mechanics-terraform)
+14. [AWS Architecture Mapping](#aws-architecture-mapping)
+15. [Cloud Deployment Mechanics (Terraform)](#cloud-deployment-mechanics-terraform)
 
 ---
 
@@ -95,7 +103,53 @@ graph TD
 
 ---
 
-## Platform Components
+## Key Design Decisions
+
+UnderdogAI is architected around the following core principles:
+
+1. **Event-Driven Simulation Processing**: Long-running Monte Carlo tournament simulations are decoupled from the HTTP request/response cycle using Apache Kafka. The API publishes simulation tasks asynchronously, allowing workers to scale independently and handle compute-intensive operations without blocking client connections.
+
+2. **Probabilistic Modeling via Bayesian Inference**: Match outcomes are modeled as independent Poisson processes with latent team strength parameters inferred through MCMC sampling. This enables uncertainty quantification and interpretable feature importance analysis (rank differentials, form velocity, volatility).
+
+3. **Feature Engineering via Warehouse Models**: dbt transforms raw match histories and FIFA rankings into a curated feature store (`fct_underdog_feature_mart`) with temporal joins, rolling statistics, and tier-based classifications. This centralizes feature logic and ensures consistency across training and inference.
+
+4. **Causal Effect Estimation**: DoWhy isolates the Average Treatment Effect of team preparation on tournament outcomes, validating statistical assumptions through refutation tests. This demonstrates production-grade causal reasoning beyond correlation-based feature engineering.
+
+5. **Horizontal Scalability**: Both the API gateway and simulation workers are stateless and containerized, allowing Kubernetes to scale replicas based on load. Event-driven decoupling ensures that bottlenecks can be independently resolved.
+
+---
+
+## Event-Driven Architecture
+
+The platform implements an asynchronous event-driven workflow to decouple simulation requests from long-running computations:
+
+- **FastAPI publishes simulation jobs** to the `underdog_simulation_tasks` Kafka topic when a client submits a tournament simulation request.
+- **Worker services consume jobs asynchronously** from Kafka, executing Monte Carlo simulations in parallel without blocking the API gateway.
+- **Redis tracks job progress and results**, allowing clients to poll task status via the `/api/v1/simulate/status/{task_id}` endpoint.
+
+This architecture ensures:
+- **Horizontal scalability**: Add worker replicas to increase simulation throughput
+- **Fault tolerance**: If a worker dies, Kafka rebalancing ensures another worker picks up the task
+- **Non-blocking API**: Clients receive a task ID immediately and can check progress asynchronously
+
+---
+
+## Analytics Layer
+
+The dbt analytics layer transforms raw staging tables into a structured feature warehouse:
+
+- **Staging Models**: Data cleaning, type coercion, and deduplication from raw ingestion layer
+- **Intermediate Models**: Feature engineering including temporal joins, rolling statistics (5-match point velocity, 12-month rank volatility), confederation weighting, and tier classification
+- **Marts**: The `fct_underdog_feature_mart` aggregates all features at the match-team level, enabling Bayesian modeling and causal inference
+
+Key features produced:
+- `rank_differential`: Home rank minus away rank (signed)
+- `home_rolling_point_velocity_5`: 5-match rolling average of points earned (form indicator)
+- `away_rank_volatility_12m`: 12-month rolling standard deviation of rank (unpredictability)
+- `underdog_signal_score`: Calculated upset probability signal
+- `confederation`: Regional confederation (UEFA, CONMEBOL, CAF, etc.)
+
+
 
 ### 1. Data Ingestion & ELT
 * **Orchestration**: Apache Airflow schedules and coordinates ingestion tasks under the [`elt_underdog_pipeline`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/airflow/dags/elt_underdog_pipeline.py) DAG.
@@ -173,7 +227,177 @@ The docker environment spins up local emulators representing production cloud co
 
 ---
 
-## Step-by-Step Execution Guide
+## Containerization
+
+All core services are containerized for consistent deployment across local development and cloud environments:
+
+### Available Dockerfiles
+
+- **[Dockerfile.api](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/Dockerfile.api)**: Containerizes the FastAPI / gRPC Gateway service
+  - Installs system dependencies (`build-essential`, `libpq-dev`)
+  - Exposes port 8000 (REST) and port 50051 (gRPC)
+  - Runs: `uvicorn src.api.gateway:app --host 0.0.0.0 --port 8000`
+
+- **[Dockerfile.worker](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/Dockerfile.worker)**: Containerizes the simulation worker service
+  - Installs Python dependencies via `requirements.txt`
+  - Runs: `python src/workers/simulation_worker.py`
+
+- **[Dockerfile.dbt](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/Dockerfile.dbt)**: Containerizes dbt analytics transformations
+  - Installs `dbt-postgres` and copies the `dbt/` folder
+  - Runs: `dbt run` for analytical model compilation
+
+### Building Images Locally
+
+```bash
+docker build -f Dockerfile.api -t underdog-api:latest .
+docker build -f Dockerfile.worker -t underdog-worker:latest .
+docker build -f Dockerfile.dbt -t underdog-dbt:latest .
+```
+
+---
+
+## Kubernetes Deployment (Local)
+
+Deploy the entire stack locally using Kubernetes (via `minikube` or `kind`):
+
+### Available Manifests
+
+All Kubernetes manifests are located in the [`k8s/`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/k8s) directory:
+
+- **[postgres-deployment.yaml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/k8s/postgres-deployment.yaml)**: PostgreSQL analytical warehouse with persistent storage
+- **[redis-deployment.yaml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/k8s/redis-deployment.yaml)**: Redis caching layer for job status tracking
+- **[kafka-deployment.yaml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/k8s/kafka-deployment.yaml)**: Kafka event broker with lightweight Zookeeper
+- **[api-deployment.yaml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/k8s/api-deployment.yaml)**: FastAPI/gRPC gateway with 2 replicas, auto-scaling ready
+- **[worker-deployment.yaml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/k8s/worker-deployment.yaml)**: Simulation worker with 2 replicas for horizontal scaling
+
+### Deployment Instructions
+
+```bash
+# Start minikube or kind cluster
+minikube start --memory=4096 --cpus=2
+# (or) kind create cluster
+
+# Load images into local cluster (if not pushing to registry)
+minikube image load underdog-api:latest
+minikube image load underdog-worker:latest
+
+# Deploy all services
+kubectl apply -f k8s/
+
+# Verify deployments
+kubectl get deployments
+kubectl get pods
+kubectl get services
+
+# Forward ports for local access
+kubectl port-forward svc/api 8000:8000 &
+kubectl port-forward svc/postgres 5432:5432 &
+
+# View logs
+kubectl logs -f deployment/api
+kubectl logs -f deployment/worker
+```
+
+### Scalability Features
+
+- **API Gateway**: 2 replicas with request/response latency logging and X-Request-ID tracing
+- **Worker Replicas**: 2 replicas consuming Kafka tasks asynchronously with per-task structured logging
+- **Resource Requests/Limits**: All services define CPU and memory requests/limits for proper Kubernetes scheduling
+- **Auto-recovery**: Pod restart policies and health checks ensure service resilience
+
+---
+
+## CI/CD Pipeline
+
+GitHub Actions workflow runs on every push and pull request to the `main` branch.
+
+### Pipeline Stages
+
+**[.github/workflows/ci.yml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/.github/workflows/ci.yml)** defines three automated stages:
+
+1. **Lint**: Validates Python code style with `flake8`
+   ```bash
+   flake8 src/ tests/
+   ```
+
+2. **Test**: Runs unit tests with `pytest`
+   ```bash
+   pytest --maxfail=1 -v
+   ```
+   - Tests validate team name cleaning, lookup tables, and probability bounds
+   - API endpoint responses are tested via `fastapi.testclient.TestClient`
+   - Services include a Postgres and Redis test database for integration tests
+
+3. **Build**: Verifies Docker image compilation
+   - Builds `Dockerfile.api`, `Dockerfile.worker`, and `Dockerfile.dbt`
+   - Ensures no build-time errors are introduced
+
+### Running Locally
+
+```bash
+# Lint
+flake8 src/ tests/
+
+# Tests (requires services running)
+pytest --maxfail=1 -v
+
+# Build Docker images
+docker build -f Dockerfile.api -t underdog-api:latest .
+docker build -f Dockerfile.worker -t underdog-worker:latest .
+```
+
+---
+
+## Observability & Structured Logging
+
+All critical system paths emit structured JSON logs for tracing, debugging, and monitoring:
+
+### API Gateway Logging
+
+The FastAPI middleware injects a unique `X-Request-ID` header into every HTTP request and logs:
+
+```json
+{
+  "request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "method": "GET",
+  "endpoint": "/api/v1/predict",
+  "status": 200,
+  "latency_ms": 145.23
+}
+```
+
+### Worker Logging
+
+The simulation worker logs lifecycle events with structured JSON:
+
+```json
+{
+  "request_id": "task-uuid",
+  "event": "simulation_task_consumed",
+  "year": 2022,
+  "simulation_runs": 1000
+}
+```
+
+```json
+{
+  "request_id": "task-uuid",
+  "event": "simulation_completed",
+  "status": "success"
+}
+```
+
+```json
+{
+  "request_id": "task-uuid",
+  "event": "simulation_failed",
+  "reason": "error message"
+}
+```
+
+All logs are printed to `stdout` in JSON format, allowing container orchestrators to aggregate, search, and monitor via centralized logging solutions (e.g., ELK stack, Datadog, CloudWatch).
+
+
 
 ### Prerequisites
 * [Docker Desktop](https://www.docker.com/products/docker-desktop/) (ensure it is running)
@@ -345,6 +569,34 @@ grpcurl -plaintext localhost:50051 list
 # Call PredictMatch gRPC Method
 grpcurl -plaintext -d '{"home_team": "Brazil", "away_team": "Cameroon"}' localhost:50051 simulation.SimulationService/PredictMatch
 ```
+
+---
+
+## AWS Architecture Mapping
+
+UnderdogAI is designed as a cloud-ready platform. The following mapping shows how local development components translate to AWS production services:
+
+| Local Development | AWS Production Service | Purpose |
+| :--- | :--- | :--- |
+| **Docker Compose** | AWS ECS / EKS | Container orchestration and deployment |
+| **PostgreSQL (local)** | AWS RDS (PostgreSQL) | Managed relational database for feature store |
+| **MinIO S3 Emulator** | AWS S3 | Object storage for raw CSV data and model artifacts |
+| **Apache Kafka (local)** | AWS Managed Streaming for Kafka (MSK) | Event broker for asynchronous task distribution |
+| **Redis (local)** | AWS ElastiCache (Redis) | Managed cache for job status and results |
+| **Apache Airflow (local)** | AWS Managed Workflows for Apache Airflow (MWAA) | Orchestrated data ingestion and transformation pipelines |
+| **FastAPI Gateway** | AWS ECS/EKS Deployment or API Gateway + Lambda | REST/gRPC API endpoint |
+| **Simulation Workers** | AWS ECS/EKS Auto-Scaling Group | Scalable compute for Monte Carlo simulations |
+| **MLflow (local)** | AWS S3 + RDS | Centralized model tracking and metadata storage |
+
+### Migration Strategy
+
+The containerized and Kubernetes-ready architecture enables straightforward cloud migration:
+
+1. **Build and push Docker images** to AWS ECR (Elastic Container Registry)
+2. **Deploy manifests** to AWS EKS (Elastic Kubernetes Service) with minimal modification
+3. **Provision databases and caches** using AWS RDS and ElastiCache
+4. **Configure IAM roles** for service-to-service authentication (e.g., ECS → RDS, ECS → S3)
+5. **Enable monitoring** via CloudWatch Logs and X-Ray for structured log aggregation
 
 ---
 

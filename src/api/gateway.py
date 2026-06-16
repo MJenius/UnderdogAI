@@ -7,7 +7,9 @@ import math
 import csv
 import psycopg2
 import redis
-from fastapi import FastAPI, HTTPException
+import logging
+import time
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from confluent_kafka import Producer
 import grpc
@@ -19,6 +21,26 @@ import simulation_pb2
 import simulation_pb2_grpc
 
 app = FastAPI()
+
+@app.middleware("http")
+async def logging_middleware(request: Request, call_next):
+    request_id = str(uuid.uuid4())
+    start_time = time.time()
+    
+    response = await call_next(request)
+    
+    elapsed_ms = (time.time() - start_time) * 1000
+    log_entry = {
+        "request_id": request_id,
+        "method": request.method,
+        "endpoint": request.url.path,
+        "status": response.status_code,
+        "latency_ms": round(elapsed_ms, 2)
+    }
+    print(json.dumps(log_entry))
+    
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 class TournamentRequest(BaseModel):
     tournament_year: int

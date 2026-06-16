@@ -5,6 +5,7 @@ import math
 import random
 import psycopg2
 import redis
+import uuid
 from confluent_kafka import Consumer, KafkaError
 import src.models.inference as inference
 import src.models.shootout_resilience as shootout_mod
@@ -544,6 +545,14 @@ def main():
     consumer = Consumer(conf)
     consumer.subscribe(["underdog_simulation_tasks"])
     r = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+    
+    log_entry = {
+        "worker_id": str(uuid.uuid4()),
+        "event": "worker_started",
+        "kafka_brokers": kafka_servers
+    }
+    print(json.dumps(log_entry))
+    
     while True:
         msg = consumer.poll(1.0)
         if msg is None:
@@ -560,6 +569,14 @@ def main():
             runs = event["simulation_runs"]
             progression_mode = event.get("progression_mode", "")
             
+            log_entry = {
+                "request_id": task_id,
+                "event": "simulation_task_consumed",
+                "year": year,
+                "simulation_runs": runs
+            }
+            print(json.dumps(log_entry))
+            
             conn = inference.get_db_connection()
             teams, team_features = fetch_tournament_teams(conn, year)
             h2h_biases = inference.precompute_h2h_biases(conn, teams, year)
@@ -567,6 +584,13 @@ def main():
             groups = reconstruct_groups(teams, conn, year)
             s_stats = shootout_mod.precompute_shootout_stats(conn, teams, year)
             conn.close()
+            
+            log_entry = {
+                "request_id": task_id,
+                "event": "simulation_preparation_complete",
+                "teams_count": len(teams)
+            }
+            print(json.dumps(log_entry))
             
             intercept, home_adv, home_adv_neutral, beta_diff, beta_vel, beta_vol, beta_rank_prior, team_strengths = inference.get_latest_model_params()
             results = run_tournament_simulation(
@@ -576,10 +600,24 @@ def main():
             )
             r.set(task_id, json.dumps(results), ex=3600)
             r.set(f"task:{task_id}:status", "COMPLETED", ex=3600)
+            
+            log_entry = {
+                "request_id": task_id,
+                "event": "simulation_completed",
+                "status": "success"
+            }
+            print(json.dumps(log_entry))
         except Exception as e:
             try:
                 task_id = event["task_id"]
                 r.set(f"task:{task_id}:status", "ERROR", ex=3600)
+                
+                log_entry = {
+                    "request_id": task_id,
+                    "event": "simulation_failed",
+                    "reason": str(e)
+                }
+                print(json.dumps(log_entry))
             except Exception:
                 pass
             sys.stderr.write(str(e) + "\n")
