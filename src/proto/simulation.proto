@@ -26,11 +26,10 @@ message TournamentSimulationRequest {
   string progression_mode = 3;
 }
 
-message SimulationTaskStatus {
-  string task_id = 1;
-  string status = 2;
-  string redis_key = 3;
-  float progress = 4;
+message TierLookbackStats {
+  float trailing_point_velocity = 1;
+  float trailing_goal_margin = 2;
+  string opponent_tier = 3;
 }
 
 message FixtureRequest {
@@ -47,6 +46,22 @@ message TournamentFixture {
   float upset_probability = 7;
   string risk_label = 8;
   string explainability_narrative = 9;
+  TierLookbackStats home_lookback = 10;
+  TierLookbackStats away_lookback = 11;
+  float h2h_bias = 12;
+}
+
+message SimulationStatusRequest {
+  string task_id = 1;
+}
+
+message SimulationTaskStatus {
+  string task_id = 1;
+  string status = 2;
+  string redis_key = 3;
+  float progress = 4;
+  map<string, float> result = 5;
+  string progression_mode = 6;
 }
 
 message FixtureListResponse {
@@ -56,5 +71,6 @@ message FixtureListResponse {
 service SimulationService {
   rpc PredictMatch(MatchPredictionRequest) returns (MatchPredictionResponse);
   rpc SimulateTournament(TournamentSimulationRequest) returns (SimulationTaskStatus);
+  rpc GetSimulationStatus(SimulationStatusRequest) returns (SimulationTaskStatus);
   rpc GetFixtures(FixtureRequest) returns (FixtureListResponse);
 }

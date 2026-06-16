@@ -56,11 +56,20 @@ function Combobox({
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [justFocused, setJustFocused] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setSearch(value);
   }, [value]);
+
+  const filteredOptions = options.filter((opt) =>
+    opt.toLowerCase().includes(search.toLowerCase())
+  );
+
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [search, isOpen]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -76,9 +85,35 @@ function Combobox({
     };
   }, [value]);
 
-  const filteredOptions = options.filter((opt) =>
-    opt.toLowerCase().includes(search.toLowerCase())
-  );
+  function onKeyDown(e: React.KeyboardEvent) {
+    if (!isOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        setIsOpen(true);
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIndex((prev) => Math.min(prev + 1, filteredOptions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((prev) => Math.max(prev - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIndex >= 0 && activeIndex < filteredOptions.length) {
+        const opt = filteredOptions[activeIndex];
+        onChange(opt);
+        setSearch(opt);
+        setIsOpen(false);
+        setJustFocused(false);
+      }
+    } else if (e.key === "Escape") {
+      setIsOpen(false);
+      setSearch(value);
+      setJustFocused(false);
+    }
+  }
 
   return (
     <div ref={containerRef} className="relative w-full">
@@ -90,6 +125,12 @@ function Combobox({
           placeholder={placeholder}
           value={search}
           disabled={disabled}
+          role="combobox"
+          aria-expanded={isOpen}
+          aria-autocomplete="list"
+          aria-controls={`${id}-listbox`}
+          aria-activedescendant={activeIndex >= 0 ? `${id}-opt-${activeIndex}` : undefined}
+          onKeyDown={onKeyDown}
           onChange={(e) => {
             const val = e.target.value;
             if (justFocused && value !== "") {
@@ -127,13 +168,24 @@ function Combobox({
         </button>
       </div>
       {isOpen && (
-        <ul className="absolute z-50 w-full mt-2 max-h-60 overflow-y-auto bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl divide-y divide-zinc-800/40">
+        <ul
+          id={`${id}-listbox`}
+          role="listbox"
+          className="absolute z-50 w-full mt-2 max-h-60 overflow-y-auto bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl divide-y divide-zinc-800/40"
+        >
           {filteredOptions.length > 0 ? (
-            filteredOptions.map((opt) => (
+            filteredOptions.map((opt, idx) => (
               <li
                 key={opt}
-                className={`px-4 py-2.5 text-sm cursor-pointer transition-colors hover:bg-indigo-600 hover:text-white ${
-                  opt === value ? "bg-indigo-600/30 text-indigo-400 font-semibold" : "text-zinc-300"
+                id={`${id}-opt-${idx}`}
+                role="option"
+                aria-selected={opt === value}
+                className={`px-4 py-2.5 text-sm cursor-pointer transition-colors ${
+                  idx === activeIndex
+                    ? "bg-indigo-600 text-white"
+                    : opt === value
+                    ? "bg-indigo-600/30 text-indigo-400 font-semibold"
+                    : "text-zinc-300 hover:bg-zinc-800"
                 }`}
                 onClick={() => {
                   onChange(opt);
@@ -856,11 +908,18 @@ export default function Home() {
                       <div className="flex flex-col gap-2">
                         <div className="flex justify-between items-center text-xs">
                           <span className="text-zinc-500">Status</span>
-                          <span className={`font-bold uppercase tracking-wider text-[10px] px-2 py-0.5 rounded ${
-                            simStatus === "COMPLETED" ? "bg-emerald-500/20 text-emerald-400" :
-                            simStatus === "PENDING" ? "bg-yellow-500/20 text-yellow-400 animate-pulse" :
-                            "bg-red-500/20 text-red-400"
-                          }`}>{simStatus}</span>
+                          <div className="flex items-center gap-2">
+                            {simStatus === "ERROR" && (
+                              <button onClick={handleRunSimulation} className="text-xs font-semibold text-rose-400 underline cursor-pointer">
+                                Retry Simulation
+                              </button>
+                            )}
+                            <span className={`font-bold uppercase tracking-wider text-[10px] px-2 py-0.5 rounded ${
+                              simStatus === "COMPLETED" ? "bg-emerald-500/20 text-emerald-400" :
+                              simStatus === "PENDING" ? "bg-yellow-500/20 text-yellow-400 animate-pulse" :
+                              "bg-red-500/20 text-red-400"
+                            }`}>{simStatus}</span>
+                          </div>
                         </div>
                         {simTaskId && (
                           <div className="flex justify-between items-center text-xs">
