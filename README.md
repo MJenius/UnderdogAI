@@ -164,17 +164,12 @@ Key features produced:
 ### 3. Decision Intelligence Core
 * **Bayesian Match Simulation**: Constructed in PyMC ([`bayesian_match_engine.py`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/src/models/bayesian_match_engine.py)). Models match score outcomes as independent Poisson processes where goals are determined by:
 
-$$
-\begin{aligned}
-\lambda_{\text{home}} &= \exp(\text{intercept} + \text{home\_adv} + \theta_{\text{home}} - \theta_{\text{away}} + \beta_{\text{diff}}\Delta\text{Rank} \\
-&\quad + \beta_{\text{vel}}\text{Vel}_{\text{home}} + \beta_{\text{vol}}\text{Vol}_{\text{home}}) \\
-\lambda_{\text{away}} &= \exp(\text{intercept} + \theta_{\text{away}} - \theta_{\text{home}} - \beta_{\text{diff}}\Delta\text{Rank} \\
-&\quad + \beta_{\text{vel}}\text{Vel}_{\text{away}} + \beta_{\text{vol}}\text{Vol}_{\text{away}})
-\end{aligned}
-$$
+$$\lambda_{\mathrm{home}} = \exp(\mathrm{intercept} + \mathrm{home\_adv} + \theta_{\mathrm{home}} - \theta_{\mathrm{away}} + \beta_{\mathrm{diff}}\Delta\mathrm{Rank} + \beta_{\mathrm{vel}}\mathrm{Vel}_{\mathrm{home}} + \beta_{\mathrm{vol}}\mathrm{Vol}_{\mathrm{home}})$$
 
-  The model estimates latent team strengths ($\theta$) and regression coefficients using MCMC sampling. Experiment logs, Brier score calibration, log loss, and serialized parameters (`model_summary.csv`) are uploaded to MLflow.
-  
+$$\lambda_{\mathrm{away}} = \exp(\mathrm{intercept} + \theta_{\mathrm{away}} - \theta_{\mathrm{home}} - \beta_{\mathrm{diff}}\Delta\text{Rank} + \beta_{\mathrm{vel}}\mathrm{Vel}_{\mathrm{away}} + \beta_{\mathrm{vol}}\mathrm{Vol}_{\mathrm{away}})$$
+
+The model estimates latent team strengths ($\theta$) and regression coefficients using MCMC sampling. Experiment logs, Brier score calibration, log loss, and serialized parameters (`model_summary.csv`) are uploaded to MLflow.
+
 * **Causal Inference Analysis**: Implemented via Microsoft's DoWhy ([`causal_inference_engine.py`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/src/models/causal_inference_engine.py)). Isolates the Average Treatment Effect (ATE) of high team preparation (treatment defined as friendly match point velocity $\ge 1.5$ over the 2 years leading to a tournament) on World Cup match wins, controlling for confounding variables like team rank, opponent rank, and historical volatility. Establishes statistical validity through Placebo Treatment and Random Common Cause refutation.
 
 ### 4. Microservices Layer
