@@ -164,7 +164,7 @@ Key features produced:
 ### 3. Decision Intelligence Core
 * **Bayesian Match Simulation**: Constructed in PyMC ([`bayesian_match_engine.py`](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/src/models/bayesian_match_engine.py)). Models match score outcomes as independent Poisson processes where goals are determined by:
   
-  $$
+    $$
   \begin{aligned}
   \lambda_{\text{home}} &= \exp(\text{intercept} + \text{home\_adv} + \theta_{\text{home}} - \theta_{\text{away}} + \beta_{\text{diff}}\Delta\text{Rank} \\
   &\quad + \beta_{\text{vel}}\text{Vel}_{\text{home}} + \beta_{\text{vol}}\text{Vol}_{\text{home}}) \\
