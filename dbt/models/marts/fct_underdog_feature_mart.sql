@@ -48,6 +48,12 @@ team_rolling as (
             rows between 5 preceding and 1 preceding
         ) as team_rolling_point_velocity_5
     from team_matches
+),
+shootout_resilience as (
+    select * from {{ ref('int_shootout_resilience') }}
+),
+rank_momentum as (
+    select * from {{ ref('int_rank_momentum') }}
 )
 select
     m.match_id,
@@ -68,7 +74,17 @@ select
     coalesce(h_vol.rank_vol_12m, 0) as home_rank_volatility_12m,
     coalesce(a_vol.rank_vol_12m, 0) as away_rank_volatility_12m,
     (coalesce(h_roll.team_rolling_point_velocity_5, 0) * coalesce(m.home_rank, 0)) as home_underdog_signal_score,
-    (coalesce(a_roll.team_rolling_point_velocity_5, 0) * coalesce(m.away_rank, 0)) as away_underdog_signal_score
+    (coalesce(a_roll.team_rolling_point_velocity_5, 0) * coalesce(m.away_rank, 0)) as away_underdog_signal_score,
+    coalesce(h_sr.shootout_win_rate, 0.5) as home_shootout_win_rate,
+    coalesce(h_sr.first_shooter_advantage_rate, 0.5) as home_first_shooter_adv,
+    coalesce(h_sr.total_shootouts, 0) as home_total_shootouts,
+    coalesce(a_sr.shootout_win_rate, 0.5) as away_shootout_win_rate,
+    coalesce(a_sr.first_shooter_advantage_rate, 0.5) as away_first_shooter_adv,
+    coalesce(a_sr.total_shootouts, 0) as away_total_shootouts,
+    coalesce(h_mom.momentum_score, 0) as home_momentum_score,
+    coalesce(h_mom.rank_change_volatility, 0) as home_rank_change_volatility,
+    coalesce(a_mom.momentum_score, 0) as away_momentum_score,
+    coalesce(a_mom.rank_change_volatility, 0) as away_rank_change_volatility
 from match_rankings m
 left join team_rolling h_roll
     on m.match_id = h_roll.match_id
@@ -82,3 +98,13 @@ left join ranking_volatility h_vol
 left join ranking_volatility a_vol
     on m.away_team = a_vol.country_full
     and m.away_rank_date = a_vol.rank_date
+left join shootout_resilience h_sr
+    on m.home_team = h_sr.team
+left join shootout_resilience a_sr
+    on m.away_team = a_sr.team
+left join rank_momentum h_mom
+    on m.home_team = h_mom.country_full
+    and m.home_rank_date = h_mom.rank_date
+left join rank_momentum a_mom
+    on m.away_team = a_mom.country_full
+    and m.away_rank_date = a_mom.rank_date

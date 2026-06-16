@@ -6,3 +6,4 @@ sources:
     tables:
       - name: raw_match_results
       - name: raw_fifa_rankings
+      - name: raw_shootouts

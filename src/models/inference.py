@@ -3,6 +3,8 @@ import glob
 import csv
 import math
 import psycopg2
+import src.models.shootout_resilience as shootout_resilience
+import src.models.tournament_weights as tournament_weights
 
 def get_latest_model_params():
     files = glob.glob(os.path.join("mlruns", "**", "model_summary.csv"), recursive=True)
@@ -194,6 +196,53 @@ def get_tier_similarity_features(conn, team_name, opponent_tier, year=None):
             return float(row[0]) if row[0] is not None else 1.0, float(row[1]) if row[1] is not None else 0.0
         return 1.0, 0.0
 
+def get_rank_momentum(conn, team_name, year=None):
+    std_name = get_standard_team_name(team_name)
+    fifa_name = get_fifa_rankings_name(std_name)
+    if year is not None:
+        query = """
+            SELECT
+                CASE WHEN TRIM(home_team) = TRIM(%s) THEN home_momentum_score ELSE away_momentum_score END,
+                CASE WHEN TRIM(home_team) = TRIM(%s) THEN home_rank_change_volatility ELSE away_rank_change_volatility END
+            FROM fct_underdog_feature_mart
+            WHERE (TRIM(home_team) = TRIM(%s) OR TRIM(away_team) = TRIM(%s))
+              AND match_date < MAKE_DATE(%s, 1, 1)
+            ORDER BY match_date DESC
+            LIMIT 1
+        """
+        params = (std_name, std_name, std_name, std_name, int(year))
+    else:
+        query = """
+            SELECT
+                CASE WHEN TRIM(home_team) = TRIM(%s) THEN home_momentum_score ELSE away_momentum_score END,
+                CASE WHEN TRIM(home_team) = TRIM(%s) THEN home_rank_change_volatility ELSE away_rank_change_volatility END
+            FROM fct_underdog_feature_mart
+            WHERE (TRIM(home_team) = TRIM(%s) OR TRIM(away_team) = TRIM(%s))
+            ORDER BY match_date DESC
+            LIMIT 1
+        """
+        params = (std_name, std_name, std_name, std_name)
+    with conn.cursor() as cur:
+        cur.execute(query, params)
+        row = cur.fetchone()
+        if row:
+            return {
+                "momentum": float(row[0]) if row[0] is not None else 0.0,
+                "rank_change_vol": float(row[1]) if row[1] is not None else 0.0
+            }
+    return {"momentum": 0.0, "rank_change_vol": 0.0}
+
+def get_neutral_confederation_modifier(home_conf, away_conf, match_country_conf=None, neutral=True):
+    if not neutral:
+        return 0.0, 0.0
+    home_mod = 0.0
+    away_mod = 0.0
+    if home_conf and match_country_conf and home_conf == match_country_conf:
+        home_mod = 0.4
+    if away_conf and match_country_conf and away_conf == match_country_conf:
+        away_mod = 0.4
+    return home_mod, away_mod
+
 def get_h2h_bias(conn, team_a, team_b, year=None):
     std_a = get_standard_team_name(team_a)
     std_b = get_standard_team_name(team_b)
@@ -204,7 +253,9 @@ def get_h2h_bias(conn, team_a, team_b, year=None):
                 home_team,
                 away_team,
                 home_score,
-                away_score
+                away_score,
+                COALESCE(home_rank, 100) as home_rank,
+                COALESCE(away_rank, 100) as away_rank
             FROM fct_underdog_feature_mart
             WHERE ((TRIM(home_team) = TRIM(%s) AND TRIM(away_team) = TRIM(%s))
                OR (TRIM(home_team) = TRIM(%s) AND TRIM(away_team) = TRIM(%s)))
@@ -219,7 +270,9 @@ def get_h2h_bias(conn, team_a, team_b, year=None):
                 home_team,
                 away_team,
                 home_score,
-                away_score
+                away_score,
+                COALESCE(home_rank, 100) as home_rank,
+                COALESCE(away_rank, 100) as away_rank
             FROM fct_underdog_feature_mart
             WHERE ((TRIM(home_team) = TRIM(%s) AND TRIM(away_team) = TRIM(%s))
                OR (TRIM(home_team) = TRIM(%s) AND TRIM(away_team) = TRIM(%s)))
@@ -233,6 +286,9 @@ def get_h2h_bias(conn, team_a, team_b, year=None):
         rows = cur.fetchall()
     sum_w_pts_a = 0.0
     sum_w_pts_b = 0.0
+    bogey_recent_count = 0
+    bogey_recent_wins_b = 0
+    recent_matches = sorted(rows, key=lambda r: int(r[0]) if r[0] else eval_year, reverse=True)[:5]
     for row in rows:
         match_year = int(row[0]) if row[0] is not None else eval_year
         h_team = row[1]
@@ -255,11 +311,32 @@ def get_h2h_bias(conn, team_a, team_b, year=None):
         else:
             sum_w_pts_a += 0.5 * weight
             sum_w_pts_b += 0.5 * weight
+    for row in recent_matches:
+        h_team = row[1]
+        a_team = row[2]
+        h_score = int(row[3]) if row[3] is not None else 0
+        a_score = int(row[4]) if row[4] is not None else 0
+        h_rank = int(row[5])
+        a_rank = int(row[6])
+        is_home_a = (get_standard_team_name(h_team) == std_a)
+        if is_home_a:
+            a_is_lower_ranked = (a_rank > h_rank)
+            b_won = (a_score > h_score)
+        else:
+            a_is_lower_ranked = (h_rank > a_rank)
+            b_won = (h_score > a_score)
+        bogey_recent_count += 1
+        if a_is_lower_ranked and b_won:
+            bogey_recent_wins_b += 1
+    bogey_flag = (bogey_recent_count >= 3 and bogey_recent_wins_b >= 3)
     total = sum_w_pts_a + sum_w_pts_b
     if total > 0.0:
         h2h_diff = (sum_w_pts_a - sum_w_pts_b) / total
-        return 0.15 * h2h_diff
-    return 0.0
+        base_bias = 0.15 * h2h_diff
+        if bogey_flag:
+            base_bias *= 1.5
+        return base_bias, bogey_flag
+    return 0.0, bogey_flag
 
 def get_team_features(conn, team_name, year=None):
     std_name = get_standard_team_name(team_name)
@@ -363,7 +440,9 @@ def precompute_h2h_biases(conn, teams, year):
             home_team,
             away_team,
             home_score,
-            away_score
+            away_score,
+            COALESCE(home_rank, 100) as home_rank,
+            COALESCE(away_rank, 100) as away_rank
         FROM fct_underdog_feature_mart
         WHERE home_team IN %s AND away_team IN %s
           AND match_date < MAKE_DATE(%s, 1, 1);
@@ -378,15 +457,17 @@ def precompute_h2h_biases(conn, teams, year):
         a_team = get_standard_team_name(row[2])
         h_score = int(row[3]) if row[3] is not None else 0
         a_score = int(row[4]) if row[4] is not None else 0
+        h_rank = int(row[5])
+        a_rank = int(row[6])
         key = (h_team, a_team) if h_team < a_team else (a_team, h_team)
         if key not in pairings:
             pairings[key] = []
-        pairings[key].append((match_year, h_team, a_team, h_score, a_score))
+        pairings[key].append((match_year, h_team, a_team, h_score, a_score, h_rank, a_rank))
     for key, matches in pairings.items():
         std_a, std_b = key
         sum_w_pts_a = 0.0
         sum_w_pts_b = 0.0
-        for match_year, h_team, a_team, h_score, a_score in matches:
+        for match_year, h_team, a_team, h_score, a_score, h_rank, a_rank in matches:
             years_ago = max(0, int(year) - match_year)
             weight = math.exp(-0.05 * years_ago)
             is_home_a = (h_team == std_a)
@@ -403,12 +484,27 @@ def precompute_h2h_biases(conn, teams, year):
             else:
                 sum_w_pts_a += 0.5 * weight
                 sum_w_pts_b += 0.5 * weight
+        recent = sorted(matches, key=lambda m: m[0], reverse=True)[:5]
+        bogey_count_b = 0
+        for match_year, h_team, a_team, h_score, a_score, h_rank, a_rank in recent:
+            is_home_a = (h_team == std_a)
+            if is_home_a:
+                b_lower = (a_rank > h_rank)
+                b_won = (a_score > h_score)
+            else:
+                b_lower = (h_rank > a_rank)
+                b_won = (h_score > a_score)
+            if b_lower and b_won:
+                bogey_count_b += 1
+        bogey_flag = (len(recent) >= 3 and bogey_count_b >= 3)
         total = sum_w_pts_a + sum_w_pts_b
         if total > 0.0:
             h2h_diff = (sum_w_pts_a - sum_w_pts_b) / total
             bias = 0.15 * h2h_diff
-            biases[(std_a, std_b)] = bias
-            biases[(std_b, std_a)] = -bias
+            if bogey_flag:
+                bias *= 1.5
+            biases[(std_a, std_b)] = (bias, bogey_flag)
+            biases[(std_b, std_a)] = (-bias, bogey_flag)
     return biases
 
 def precompute_tier_similarity(conn, teams, year):
@@ -476,7 +572,7 @@ def poisson_pmf(k, lam):
         return 1.0 if k == 0 else 0.0
     return (lam**k * math.exp(-lam)) / math.factorial(k)
 
-def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases=None, tier_similarity=None, team_features=None, model_params=None):
+def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases=None, tier_similarity=None, team_features=None, model_params=None, shootout_stats=None):
     if model_params is None:
         intercept, home_adv, home_adv_neutral, beta_diff, beta_vel, beta_vol, beta_rank_prior, team_strengths = get_latest_model_params()
     else:
@@ -487,6 +583,7 @@ def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases
         conn = get_db_connection()
         close_conn = True
 
+    bogey_flag = False
     try:
         if team_features is not None:
             home_feats = team_features.get(home_team)
@@ -514,9 +611,33 @@ def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases
             away_tier_vel, away_tier_gm = get_tier_similarity_features(conn, away_team, h_tier, year)
 
         if h2h_biases is not None:
-            h2h_val = h2h_biases.get((home_team, away_team), 0.0)
+            h2h_entry = h2h_biases.get((home_team, away_team), (0.0, False))
+            if isinstance(h2h_entry, tuple):
+                h2h_val, bogey_flag = h2h_entry
+            else:
+                h2h_val = h2h_entry
+                bogey_flag = False
         else:
-            h2h_val = get_h2h_bias(conn, home_team, away_team, year)
+            h2h_val, bogey_flag = get_h2h_bias(conn, home_team, away_team, year)
+
+        home_momentum = get_rank_momentum(conn, home_team, year) if conn else {"momentum": 0.0, "rank_change_vol": 0.0}
+        away_momentum = get_rank_momentum(conn, away_team, year) if conn else {"momentum": 0.0, "rank_change_vol": 0.0}
+
+        home_weighted_form = tournament_weights.compute_weighted_form(conn, home_team, year) if conn else 1.0
+        away_weighted_form = tournament_weights.compute_weighted_form(conn, away_team, year) if conn else 1.0
+
+        if shootout_stats is not None:
+            h_shootout = shootout_stats.get(home_team, {"win_rate": 0.5, "first_shooter_adv": 0.5, "total_shootouts": 0})
+            a_shootout = shootout_stats.get(away_team, {"win_rate": 0.5, "first_shooter_adv": 0.5, "total_shootouts": 0})
+            shootout_mod = shootout_resilience.get_shootout_draw_modifier(conn, home_team, away_team, year) if conn else 0.0
+        elif conn:
+            h_shootout = shootout_resilience.get_shootout_stats(conn, home_team, year)
+            a_shootout = shootout_resilience.get_shootout_stats(conn, away_team, year)
+            shootout_mod = shootout_resilience.get_shootout_draw_modifier(conn, home_team, away_team, year)
+        else:
+            h_shootout = {"win_rate": 0.5, "first_shooter_adv": 0.5, "total_shootouts": 0}
+            a_shootout = {"win_rate": 0.5, "first_shooter_adv": 0.5, "total_shootouts": 0}
+            shootout_mod = 0.0
 
     finally:
         if close_conn:
@@ -525,12 +646,20 @@ def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases
     h_std = get_standard_team_name(home_team)
     h_fifa = get_fifa_rankings_name(h_std)
     h_est = team_strengths.get(h_std, team_strengths.get(h_fifa, beta_rank_prior * h_rank))
-    h_str = h_est + (-0.008 * h_rank) + 0.5 * h2h_val
+    h_str = h_est + 0.5 * h2h_val
 
     a_std = get_standard_team_name(away_team)
     a_fifa = get_fifa_rankings_name(a_std)
     a_est = team_strengths.get(a_std, team_strengths.get(a_fifa, beta_rank_prior * a_rank))
-    a_str = a_est + (-0.008 * a_rank) - 0.5 * h2h_val
+    a_str = a_est - 0.5 * h2h_val
+
+    momentum_weight = 0.002
+    h_str = h_str + momentum_weight * home_momentum["momentum"]
+    a_str = a_str + momentum_weight * away_momentum["momentum"]
+
+    form_blend = 0.3
+    blended_h_vel = (1.0 - form_blend) * home_tier_vel + form_blend * home_weighted_form
+    blended_a_vel = (1.0 - form_blend) * away_tier_vel + form_blend * away_weighted_form
 
     conf_weights = {
         "UEFA": 1.45,
@@ -582,17 +711,18 @@ def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases
     h_adv_val = home_adv if home_adv_applied_to_home else (home_adv_neutral if neutral else 0.0)
     a_adv_val = home_adv if home_adv_applied_to_away else (home_adv_neutral if neutral else 0.0)
 
-    rank_diff = h_rank - a_rank
+    neutral_conf_h_mod, neutral_conf_a_mod = get_neutral_confederation_modifier(h_conf, a_conf, None, neutral)
+    h_adv_val = h_adv_val + neutral_conf_h_mod * home_adv_neutral
+    a_adv_val = a_adv_val + neutral_conf_a_mod * home_adv_neutral
+
     lambda_home = math.exp(
         intercept + h_adv_val + h_str - a_str
-        + beta_diff * rank_diff
-        + beta_vel * home_tier_vel
+        + beta_vel * blended_h_vel
         + beta_vol * home_tier_gm
     )
     lambda_away = math.exp(
         intercept + a_adv_val + a_str - h_str
-        - beta_diff * rank_diff
-        + beta_vel * away_tier_vel
+        + beta_vel * blended_a_vel
         + beta_vol * away_tier_gm
     )
 
@@ -616,6 +746,20 @@ def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases
         away_win /= total
         draw /= total
 
+    if abs(shootout_mod) > 0.001:
+        redistribution = draw * abs(shootout_mod)
+        if shootout_mod > 0:
+            draw -= redistribution
+            home_win += redistribution
+        else:
+            draw -= redistribution
+            away_win += redistribution
+        total2 = home_win + away_win + draw
+        if total2 > 0:
+            home_win /= total2
+            away_win /= total2
+            draw /= total2
+
     underdog_score = home_feats["underdog_score"] if h_rank > a_rank else away_feats["underdog_score"]
     if h_rank > a_rank:
         upset_prob = home_win
@@ -636,7 +780,16 @@ def compute_probabilities(home_team, away_team, year=None, conn=None, h2h_biases
         f"{home_team}'s trailing 4-year point velocity against {a_tier} opponents is {home_tier_vel:.2f} with an average goal margin of {home_tier_gm:+.2f}. "
         f"{away_team}'s trailing 4-year point velocity against {h_tier} opponents is {away_tier_vel:.2f} with an average goal margin of {away_tier_gm:+.2f}."
     )
-    return home_win, away_win, draw, underdog_score, risk_label, explainability_narrative, home_tier_vel, away_tier_vel, h2h_val
+    if bogey_flag:
+        explainability_narrative += f" BOGEY ALERT: Historical H2H pattern detected — lower-ranked team has consistently neutralized the higher-ranked opponent."
+
+    return (
+        home_win, away_win, draw, underdog_score, risk_label, explainability_narrative,
+        home_tier_vel, away_tier_vel, h2h_val,
+        h_shootout["win_rate"], a_shootout["win_rate"],
+        home_momentum["momentum"], away_momentum["momentum"],
+        bogey_flag
+    )
 
 def fixtures_endpoint_batched(conn, year):
     query = """
@@ -657,6 +810,7 @@ def fixtures_endpoint_batched(conn, year):
     
     h2h_biases = precompute_h2h_biases(conn, teams, year)
     tier_similarity = precompute_tier_similarity(conn, teams, year)
+    s_stats = shootout_resilience.precompute_shootout_stats(conn, teams, year)
     
     team_features = {}
     for t in teams:
@@ -668,9 +822,15 @@ def fixtures_endpoint_batched(conn, year):
         match_date = str(row[0])
         home = row[1]
         away = row[2]
-        h_win, a_win, draw, u_score, risk, narrative, h_form, a_form, h2h = compute_probabilities(
-            home, away, year, conn, h2h_biases, tier_similarity, team_features, model_params
+        result = compute_probabilities(
+            home, away, year, conn, h2h_biases, tier_similarity, team_features, model_params, s_stats
         )
+        h_win, a_win, draw_val, u_score, risk, narrative, h_form, a_form, h2h = result[:9]
+        shootout_h = result[9] if len(result) > 9 else 0.5
+        shootout_a = result[10] if len(result) > 10 else 0.5
+        momentum_h = result[11] if len(result) > 11 else 0.0
+        momentum_a = result[12] if len(result) > 12 else 0.0
+        bogey = result[13] if len(result) > 13 else False
         h_feats = team_features[home]
         a_feats = team_features[away]
         h_rank = h_feats["rank"]
@@ -688,13 +848,131 @@ def fixtures_endpoint_batched(conn, year):
             "match_date": match_date,
             "home_win_prob": h_win,
             "away_win_prob": a_win,
-            "draw_prob": draw,
+            "draw_prob": draw_val,
             "upset_probability": upset_prob,
             "risk_label": risk,
             "explainability_narrative": narrative,
             "home_tier_form": h_form,
             "away_tier_form": a_form,
-            "h2h_bias": h2h
+            "h2h_bias": h2h,
+            "shootout_resilience_home": shootout_h,
+            "shootout_resilience_away": shootout_a,
+            "momentum_home": momentum_h,
+            "momentum_away": momentum_a,
+            "bogey_team_flag": bogey
         })
     fixtures.sort(key=lambda x: x["upset_probability"], reverse=True)
     return fixtures
+
+def simulate_seeding_draw(conn, year):
+    query = """
+        WITH team_matches AS (
+            SELECT home_team AS team FROM fct_underdog_feature_mart WHERE tournament = 'FIFA World Cup' AND EXTRACT(YEAR FROM match_date) = %s
+            UNION
+            SELECT away_team AS team FROM fct_underdog_feature_mart WHERE tournament = 'FIFA World Cup' AND EXTRACT(YEAR FROM match_date) = %s
+        )
+        SELECT team FROM team_matches
+    """
+    with conn.cursor() as cur:
+        cur.execute(query, (int(year), int(year)))
+        teams = [r[0] for r in cur.fetchall()]
+    
+    team_data = []
+    for t in teams:
+        feats = get_team_features(conn, t, year)
+        team_data.append({
+            "team": get_standard_team_name(t),
+            "rank": feats["rank"],
+            "conf": feats["conf"] or "Unknown"
+        })
+    
+    team_data.sort(key=lambda x: x["rank"])
+    
+    num_teams = len(team_data)
+    if num_teams == 0:
+        return {"groups": [], "pots": []}
+    
+    num_groups = num_teams // 4
+    if num_groups == 0:
+        num_groups = 1
+        
+    pots = [[] for _ in range(4)]
+    for idx, t in enumerate(team_data):
+        pot_idx = min(idx // num_groups, 3)
+        pots[pot_idx].append(t)
+        
+    import random
+    success = False
+    groups = []
+    
+    for retry in range(2000):
+        pot_copies = [list(p) for p in pots]
+        for p in pot_copies:
+            random.shuffle(p)
+            
+        temp_groups = [[] for _ in range(num_groups)]
+        draw_failed = False
+        
+        for pot_idx in range(4):
+            pot_teams = pot_copies[pot_idx]
+            for g_idx in range(num_groups):
+                valid_team_idx = -1
+                for t_idx, team in enumerate(pot_teams):
+                    uefa_count = sum(1 for gt in temp_groups[g_idx] if gt["conf"] == "UEFA")
+                    other_conf_counts = {}
+                    for gt in temp_groups[g_idx]:
+                        if gt["conf"] != "UEFA":
+                            other_conf_counts[gt["conf"]] = other_conf_counts.get(gt["conf"], 0) + 1
+                    
+                    if team["conf"] == "UEFA":
+                        if uefa_count < 2:
+                            valid_team_idx = t_idx
+                            break
+                    else:
+                        if other_conf_counts.get(team["conf"], 0) < 1:
+                            valid_team_idx = t_idx
+                            break
+                
+                if valid_team_idx == -1:
+                    draw_failed = True
+                    break
+                else:
+                    team_to_add = pot_teams.pop(valid_team_idx)
+                    temp_groups[g_idx].append(team_to_add)
+            
+            if draw_failed:
+                break
+                
+        if not draw_failed:
+            groups = temp_groups
+            success = True
+            break
+            
+    if not success:
+        pot_copies = [list(p) for p in pots]
+        for p in pot_copies:
+            random.shuffle(p)
+        groups = [[] for _ in range(num_groups)]
+        for pot_idx in range(4):
+            for g_idx in range(num_groups):
+                if pot_copies[pot_idx]:
+                    groups[g_idx].append(pot_copies[pot_idx].pop(0))
+                    
+    formatted_pots = []
+    for p_idx, p_teams in enumerate(pots):
+        formatted_pots.append({
+            "pot_number": p_idx + 1,
+            "teams": p_teams
+        })
+        
+    formatted_groups = []
+    for g_idx, g_teams in enumerate(groups):
+        formatted_groups.append({
+            "group_name": chr(65 + g_idx),
+            "teams": g_teams
+        })
+        
+    return {
+        "groups": formatted_groups,
+        "pots": formatted_pots
+    }

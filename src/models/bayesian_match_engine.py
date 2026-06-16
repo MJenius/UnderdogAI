@@ -95,7 +95,6 @@ if __name__ == "__main__":
     with pm.Model(coords=coords) as model:
         home_idx = pm.Data("home_idx", train_home_idx)
         away_idx = pm.Data("away_idx", train_away_idx)
-        rank_diff = pm.Data("rank_diff", train_rank_diff)
         h_vel = pm.Data("h_vel", train_h_vel)
         a_vel = pm.Data("a_vel", train_a_vel)
         h_vol = pm.Data("h_vol", train_h_vol)
@@ -109,12 +108,11 @@ if __name__ == "__main__":
         home_adv = pm.Normal("home_adv", mu=0.0, sigma=1.0)
         home_adv_neutral = pm.Normal("home_adv_neutral", mu=0.0, sigma=0.3)
         
-        beta_diff = pm.Normal("beta_diff", mu=0.0, sigma=0.5)
         beta_vel = pm.Normal("beta_vel", mu=0.0, sigma=0.5)
         beta_vol = pm.Normal("beta_vol", mu=0.0, sigma=0.5)
         
         beta_rank_prior = pm.Normal("beta_rank_prior", mu=-0.01, sigma=0.01)
-        sigma_epsilon = pm.HalfNormal("sigma_epsilon", sigma=1.0)
+        sigma_epsilon = pm.HalfNormal("sigma_epsilon", sigma=0.3)
         
         team_mu = beta_rank_prior * baseline_ranks
         epsilon = pm.Normal("epsilon", mu=0.0, sigma=sigma_epsilon, dims="team")
@@ -125,13 +123,11 @@ if __name__ == "__main__":
         
         lambda_home = pm.math.exp(
             intercept + effective_home_adv + team_strength[home_idx] - team_strength[away_idx]
-            + beta_diff * rank_diff
             + beta_vel * h_vel
             + beta_vol * h_vol
         )
         lambda_away = pm.math.exp(
             intercept + effective_away_adv + team_strength[away_idx] - team_strength[home_idx]
-            - beta_diff * rank_diff
             + beta_vel * a_vel
             + beta_vol * a_vol
         )
@@ -147,11 +143,10 @@ if __name__ == "__main__":
         mlflow.set_experiment("underdog_ai_intelligence")
         
     with model:
-        idata = pm.sample(draws=200, tune=100, chains=1, cores=1, random_seed=42)
+        idata = pm.sample(draws=1000, tune=500, chains=2, cores=1, random_seed=42)
         pm.set_data({
             "home_idx": test_home_idx,
             "away_idx": test_away_idx,
-            "rank_diff": test_rank_diff,
             "h_vel": test_h_vel,
             "a_vel": test_a_vel,
             "h_vol": test_h_vol,
@@ -206,7 +201,6 @@ if __name__ == "__main__":
     intercept_mean = float(summary.loc["intercept", "mean"])
     home_adv_mean = float(summary.loc["home_adv", "mean"])
     home_adv_neutral_mean = float(summary.loc["home_adv_neutral", "mean"])
-    beta_diff_mean = float(summary.loc["beta_diff", "mean"])
     beta_rank_prior_mean = float(summary.loc["beta_rank_prior", "mean"])
     
     team_strengths_mean = {}
@@ -252,17 +246,21 @@ if __name__ == "__main__":
             a_tier_vel = tier_similarity.get(a, {}).get(h_tier, {}).get("vel", 1.0)
             a_tier_gm = tier_similarity.get(a, {}).get(h_tier, {}).get("gm", 0.0)
             
-            h2h_val = h2h_biases.get((h, a), 0.0)
+            h2h_entry = h2h_biases.get((h, a), (0.0, False))
+            if isinstance(h2h_entry, tuple):
+                h2h_val = h2h_entry[0]
+            else:
+                h2h_val = h2h_entry
             
             h_std = inference.get_standard_team_name(h)
             h_fifa = inference.get_fifa_rankings_name(h_std)
             h_est = team_strengths_mean.get(h_std, team_strengths_mean.get(h_fifa, beta_rank_prior_mean * h_rank))
-            h_str = h_est + (-0.008 * h_rank) + 0.5 * h2h_val
+            h_str = h_est + 0.5 * h2h_val
             
             a_std = inference.get_standard_team_name(a)
             a_fifa = inference.get_fifa_rankings_name(a_std)
             a_est = team_strengths_mean.get(a_std, team_strengths_mean.get(a_fifa, beta_rank_prior_mean * a_rank))
-            a_str = a_est + (-0.008 * a_rank) - 0.5 * h2h_val
+            a_str = a_est - 0.5 * h2h_val
             
             conf_weights = {
                 "UEFA": 1.45,
@@ -294,10 +292,8 @@ if __name__ == "__main__":
             h_adv_val = home_adv_mean if home_adv_applied_to_home else (home_adv_neutral_mean if neutral_val else 0.0)
             a_adv_val = home_adv_mean if home_adv_applied_to_away else (home_adv_neutral_mean if neutral_val else 0.0)
             
-            rank_diff = h_rank - a_rank
-            
-            base_h = intercept_mean + h_adv_val + h_str - a_str + beta_diff_mean * rank_diff
-            base_a = intercept_mean + a_adv_val + a_str - h_str - beta_diff_mean * rank_diff
+            base_h = intercept_mean + h_adv_val + h_str - a_str
+            base_a = intercept_mean + a_adv_val + a_str - h_str
             
             matches_to_calibrate.append({
                 "base_h": base_h,
@@ -314,12 +310,11 @@ if __name__ == "__main__":
         beta_tier_vel, beta_tier_gm = params
         loss = 0.0
         for m in matches_to_calibrate:
-            lam_h = np.exp(m["base_h"] + beta_tier_vel * m["h_tier_vel"] + beta_tier_gm * m["h_tier_gm"])
-            lam_a = np.exp(m["base_a"] + beta_tier_vel * m["a_tier_vel"] + beta_tier_gm * m["a_tier_gm"])
-            p_h = lam_h / (lam_h + lam_a)
-            outcome = 1.0 if m["home_score"] > m["away_score"] else 0.0
-            p_h = min(max(p_h, 1e-6), 1 - 1e-6)
-            loss += -(outcome * np.log(p_h) + (1 - outcome) * np.log(1 - p_h))
+            log_lam_h = m["base_h"] + beta_tier_vel * m["h_tier_vel"] + beta_tier_gm * m["h_tier_gm"]
+            log_lam_a = m["base_a"] + beta_tier_vel * m["a_tier_vel"] + beta_tier_gm * m["a_tier_gm"]
+            lam_h = np.exp(log_lam_h)
+            lam_a = np.exp(log_lam_a)
+            loss += -(m["home_score"] * log_lam_h - lam_h) - (m["away_score"] * log_lam_a - lam_a)
         return loss
         
     result_opt = minimize(neg_log_loss, x0=np.array([0.0, 0.0]), method="Nelder-Mead")

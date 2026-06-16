@@ -18,6 +18,11 @@ message MatchPredictionResponse {
   float home_tier_form = 7;
   float away_tier_form = 8;
   float h2h_bias = 9;
+  float shootout_resilience_home = 10;
+  float shootout_resilience_away = 11;
+  float momentum_home = 12;
+  float momentum_away = 13;
+  bool bogey_team_flag = 14;
 }
 
 message TournamentSimulationRequest {
