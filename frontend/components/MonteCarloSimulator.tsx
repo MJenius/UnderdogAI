@@ -15,6 +15,7 @@ export default function MonteCarloSimulator({ year }: { year: number }) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollFailuresRef = useRef(0);
 
   useEffect(() => {
     setTaskId(null);
@@ -22,6 +23,7 @@ export default function MonteCarloSimulator({ year }: { year: number }) {
     setResults(null);
     setProgress(0);
     setErrorMsg(null);
+    pollFailuresRef.current = 0;
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
     }
@@ -52,6 +54,7 @@ export default function MonteCarloSimulator({ year }: { year: number }) {
 
       const data = await res.json();
       setTaskId(data.task_id);
+      pollFailuresRef.current = 0;
       startPolling(data.task_id);
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : String(err));
@@ -69,6 +72,7 @@ export default function MonteCarloSimulator({ year }: { year: number }) {
       try {
         const res = await fetch(`/api/simulation/${tid}`);
         if (!res.ok) throw new Error();
+        pollFailuresRef.current = 0;
         const data = await res.json();
 
         if (data.progress !== undefined) {
@@ -88,6 +92,8 @@ export default function MonteCarloSimulator({ year }: { year: number }) {
           if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
         }
       } catch {
+        pollFailuresRef.current += 1;
+        if (pollFailuresRef.current < 3) return;
         setStatus("ERROR");
         setLoading(false);
         setErrorMsg("API Connection Error");

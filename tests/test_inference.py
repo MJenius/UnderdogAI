@@ -1,4 +1,3 @@
-import pytest
 import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -48,26 +47,39 @@ def test_tier_from_rank_emerging():
 
 def test_probability_bounds():
     from src.models.inference import compute_probabilities
-    try:
-        result = compute_probabilities("Brazil", "France", 2022)
-        h_win, a_win, draw = result[0], result[1], result[2]
-        
-        assert 0.0 <= h_win <= 1.0, f"Home win prob out of bounds: {h_win}"
-        assert 0.0 <= a_win <= 1.0, f"Away win prob out of bounds: {a_win}"
-        assert 0.0 <= draw <= 1.0, f"Draw prob out of bounds: {draw}"
-        
-        total = h_win + a_win + draw
-        assert 0.99 <= total <= 1.01, f"Probabilities do not sum to 1: {total}"
-    except Exception as e:
-        pytest.skip(f"Database not available: {e}")
+    result = compute_probabilities("Brazil", "France", **_in_memory_context())
+    h_win, a_win, draw = result[0], result[1], result[2]
+
+    assert 0.0 <= h_win <= 1.0
+    assert 0.0 <= a_win <= 1.0
+    assert 0.0 <= draw <= 1.0
+    assert 0.99 <= h_win + a_win + draw <= 1.01
 
 
 def test_underdog_signal_bounds():
     from src.models.inference import compute_probabilities
-    try:
-        result = compute_probabilities("Ghana", "Germany", 2014)
-        underdog_score = result[3]
-        
-        assert isinstance(underdog_score, (int, float)), f"Underdog score is not numeric: {type(underdog_score)}"
-    except Exception as e:
-        pytest.skip(f"Database not available: {e}")
+    result = compute_probabilities("Brazil", "France", **_in_memory_context())
+
+    assert isinstance(result[3], (int, float))
+
+
+def _in_memory_context():
+    features = {
+        "Brazil": {"rank": 1.0, "vel": 2.0, "vol": 0.1, "underdog_score": 0.2, "conf": "CONMEBOL"},
+        "France": {"rank": 4.0, "vel": 1.8, "vol": 0.2, "underdog_score": 0.1, "conf": "UEFA"},
+    }
+    tiers = {
+        "Brazil": {"elite": {"vel": 2.0, "gm": 0.5}},
+        "France": {"elite": {"vel": 1.8, "gm": 0.4}},
+    }
+    shootouts = {
+        team: {"win_rate": 0.5, "first_shooter_adv": 0.5, "total_shootouts": 0}
+        for team in features
+    }
+    return {
+        "team_features": features,
+        "h2h_biases": {("Brazil", "France"): (0.0, False)},
+        "tier_similarity": tiers,
+        "shootout_stats": shootouts,
+        "model_params": (0.0, 0.1, 0.0, 0.0, 0.1, -0.1, -0.01, {}),
+    }

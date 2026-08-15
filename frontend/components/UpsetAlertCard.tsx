@@ -85,7 +85,7 @@ export default function UpsetAlertCard({
         </div>
 
         <div className="text-xs text-zinc-400 leading-relaxed italic bg-zinc-900/10 p-3 rounded-lg border border-zinc-850/30 font-mono text-center">
-          "{narrative}"
+          &ldquo;{narrative}&rdquo;
         </div>
 
         <div className="text-[9px] text-zinc-600 font-mono text-center pt-2">

@@ -81,7 +81,7 @@ export default function SensitivityAnalyzer({
             <YAxis dataKey="name" type="category" stroke="#a1a1aa" fontSize={9} width={90} tickLine={false} axisLine={false} />
             <Tooltip
               contentStyle={{ backgroundColor: "#09090b", borderColor: "#27272a", fontSize: 10, color: "#fff" }}
-              formatter={(value: any, name: any, props: any) => {
+              formatter={(_value: unknown, _name: unknown, props: { payload?: { originalValue?: unknown } }) => {
                 const origVal = props?.payload?.originalValue;
                 let displayVal = "N/A";
                 if (typeof origVal === "number") {

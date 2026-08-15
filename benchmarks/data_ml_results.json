@@ -1,0 +1,60 @@
+{
+  "measured_at": "2026-08-15T19:48:55.333800+00:00",
+  "git_commit": "96107af50a9e3ddfbf9b26fdf37c5cb385aacb37",
+  "dataset_sha256": {
+    "fifa_ranking-2026-01-19.csv": "1e2300b3af3a09038cd8fe1644fd501f081abc52fad39299b1cdeb35f4b353aa",
+    "results.csv": "8043b32b7ebd7915397154a9b8cca37e86f30b8549b00bbbd41e67a90ebc9b41",
+    "shootouts.csv": "e52e503badc11021d5d243ddf2288346f63ad028bf8de75ae9cfb72c5475d807"
+  },
+  "ingestion": {
+    "full": {
+      "records": 120147,
+      "seconds": 9.821437299993704,
+      "records_per_second": 12233.138218993367,
+      "peak_python_mb": 2.8559932708740234
+    },
+    "incremental_noop": {
+      "records_examined": 1199,
+      "records_inserted": 0,
+      "seconds": 0.18002030000207014,
+      "records_per_second": 6660.359970437846,
+      "peak_python_mb": 0.23277664184570312
+    }
+  },
+  "dbt": {
+    "full": {
+      "seconds": 32.55959720000101,
+      "passed": true,
+      "output": "\u001b[0m19:47:13  Running with dbt=1.8.9\n\u001b[0m19:47:13  Registered adapter: postgres=1.8.2\n\u001b[0m19:47:14  Found 7 models, 19 data tests, 3 sources, 433 macros\n\u001b[0m19:47:14  \n\u001b[0m19:47:15  Concurrency: 4 threads (target='dev')\n\u001b[0m19:47:15  \n\u001b[0m19:47:15  1 of 7 START sql view model public.stg_fifa_rankings ........................... [RUN]\n\u001b[0m19:47:15  2 of 7 START sql view model public.stg_match_results ........................... [RUN]\n\u001b[0m19:47:15  3 of 7 START sql view model public.stg_shootouts ............................... [RUN]\n\u001b[0m19:47:15  3 of 7 OK created sql view model public.stg_shootouts .......................... [\u001b[32mCREATE VIEW\u001b[0m in 0.29s]\n\u001b[0m19:47:15  4 of 7 START sql view model public.int_shootout_resilience ..................... [RUN]\n\u001b[0m19:47:15  1 of 7 OK created sql view model public.stg_fifa_rankings ...................... [\u001b[32mCREATE VIEW\u001b[0m in 0.34s]\n\u001b[0m19:47:15  2 of 7 OK created sql view model public.stg_match_results ...................... [\u001b[32mCREATE VIEW\u001b[0m in 0.35s]\n\u001b[0m19:47:15  5 of 7 START sql view model public.int_rank_momentum ........................... [RUN]\n\u001b[0m19:47:15  6 of 7 START sql view model public.int_match_historical_rankings ............... [RUN]\n\u001b[0m19:47:15  4 of 7 OK created sql view model public.int_shootout_resilience ................ [\u001b[32mCREATE VIEW\u001b[0m in 0.20s]\n\u001b[0m19:47:15  6 of 7 OK created sql view model public.int_match_historical_rankings .......... [\u001b[32mCREATE VIEW\u001b[0m in 0.17s]\n\u001b[0m19:47:15  5 of 7 OK created sql view model public.int_rank_momentum ...................... [\u001b[32mCREATE VIEW\u001b[0m in 0.20s]\n\u001b[0m19:47:15  7 of 7 START sql incremental model public.fct_underdog_feature_mart ............ [RUN]\n\u001b[0m19:47:40  7 of 7 OK created sql incremental model public.fct_underdog_feature_mart ....... [\u001b[32mSELECT 49413\u001b[0m in 24.75s]\n\u001b[0m19:47:40  \n\u001b[0m19:47:40  Finished running 6 view models, 1 incremental model in 0 hours 0 minutes and 25.78 seconds (25.78s).\n\u001b[0m19:47:40  \n\u001b[0m19:47:40  \u001b[32mCompleted successfully\u001b[0m\n\u001b[0m19:47:40  \n\u001b[0m19:47:40  Done. PASS=7 WARN=0 ERROR=0 SKIP=0 TOTAL=7\n"
+    },
+    "incremental": {
+      "seconds": 25.748400900003617,
+      "passed": true,
+      "output": "\u001b[0m19:47:46  Running with dbt=1.8.9\n\u001b[0m19:47:46  Registered adapter: postgres=1.8.2\n\u001b[0m19:47:47  Found 7 models, 19 data tests, 3 sources, 433 macros\n\u001b[0m19:47:47  \n\u001b[0m19:47:47  Concurrency: 4 threads (target='dev')\n\u001b[0m19:47:47  \n\u001b[0m19:47:47  1 of 7 START sql view model public.stg_fifa_rankings ........................... [RUN]\n\u001b[0m19:47:47  2 of 7 START sql view model public.stg_match_results ........................... [RUN]\n\u001b[0m19:47:47  3 of 7 START sql view model public.stg_shootouts ............................... [RUN]\n\u001b[0m19:47:47  2 of 7 OK created sql view model public.stg_match_results ...................... [\u001b[32mCREATE VIEW\u001b[0m in 0.22s]\n\u001b[0m19:47:47  1 of 7 OK created sql view model public.stg_fifa_rankings ...................... [\u001b[32mCREATE VIEW\u001b[0m in 0.23s]\n\u001b[0m19:47:47  3 of 7 OK created sql view model public.stg_shootouts .......................... [\u001b[32mCREATE VIEW\u001b[0m in 0.23s]\n\u001b[0m19:47:47  4 of 7 START sql view model public.int_match_historical_rankings ............... [RUN]\n\u001b[0m19:47:47  5 of 7 START sql view model public.int_rank_momentum ........................... [RUN]\n\u001b[0m19:47:47  6 of 7 START sql view model public.int_shootout_resilience ..................... [RUN]\n\u001b[0m19:47:48  4 of 7 OK created sql view model public.int_match_historical_rankings .......... [\u001b[32mCREATE VIEW\u001b[0m in 0.13s]\n\u001b[0m19:47:48  5 of 7 OK created sql view model public.int_rank_momentum ...................... [\u001b[32mCREATE VIEW\u001b[0m in 0.15s]\n\u001b[0m19:47:48  6 of 7 OK created sql view model public.int_shootout_resilience ................ [\u001b[32mCREATE VIEW\u001b[0m in 0.15s]\n\u001b[0m19:47:48  7 of 7 START sql incremental model public.fct_underdog_feature_mart ............ [RUN]\n\u001b[0m19:48:05  7 of 7 OK created sql incremental model public.fct_underdog_feature_mart ....... [\u001b[32mINSERT 0 0\u001b[0m in 17.80s]\n\u001b[0m19:48:05  \n\u001b[0m19:48:05  Finished running 6 view models, 1 incremental model in 0 hours 0 minutes and 18.49 seconds (18.49s).\n\u001b[0m19:48:06  \n\u001b[0m19:48:06  \u001b[32mCompleted successfully\u001b[0m\n\u001b[0m19:48:06  \n\u001b[0m19:48:06  Done. PASS=7 WARN=0 ERROR=0 SKIP=0 TOTAL=7\n"
+    },
+    "tests": {
+      "seconds": 30.15768410000601,
+      "passed": true,
+      "output": "ASS not_null_stg_fifa_rankings_country_full ........................... [\u001b[32mPASS\u001b[0m in 0.14s]\n\u001b[0m19:48:13  10 of 19 START test not_null_stg_fifa_rankings_rank ............................ [RUN]\n\u001b[0m19:48:13  3 of 19 PASS assert_unique_country_rank_date ................................... [\u001b[32mPASS\u001b[0m in 0.77s]\n\u001b[0m19:48:13  11 of 19 START test not_null_stg_fifa_rankings_rank_date ....................... [RUN]\n\u001b[0m19:48:13  5 of 19 PASS assert_valid_rank_values .......................................... [\u001b[32mPASS\u001b[0m in 0.65s]\n\u001b[0m19:48:13  12 of 19 START test not_null_stg_match_results_away_team ....................... [RUN]\n\u001b[0m19:48:13  11 of 19 PASS not_null_stg_fifa_rankings_rank_date ............................. [\u001b[32mPASS\u001b[0m in 0.13s]\n\u001b[0m19:48:13  13 of 19 START test not_null_stg_match_results_home_team ....................... [RUN]\n\u001b[0m19:48:13  12 of 19 PASS not_null_stg_match_results_away_team ............................. [\u001b[32mPASS\u001b[0m in 0.13s]\n\u001b[0m19:48:13  14 of 19 START test not_null_stg_match_results_match_date ...................... [RUN]\n\u001b[0m19:48:14  14 of 19 PASS not_null_stg_match_results_match_date ............................ [\u001b[32mPASS\u001b[0m in 0.09s]\n\u001b[0m19:48:14  13 of 19 PASS not_null_stg_match_results_home_team ............................. [\u001b[32mPASS\u001b[0m in 0.13s]\n\u001b[0m19:48:14  15 of 19 START test not_null_stg_match_results_match_id ........................ [RUN]\n\u001b[0m19:48:14  16 of 19 START test relationships_fct_underdog_feature_mart_away_team__away_team__ref_stg_match_results_  [RUN]\n\u001b[0m19:48:14  10 of 19 PASS not_null_stg_fifa_rankings_rank .................................. [\u001b[32mPASS\u001b[0m in 0.60s]\n\u001b[0m19:48:14  17 of 19 START test relationships_fct_underdog_feature_mart_home_team__home_team__ref_stg_match_results_  [RUN]\n\u001b[0m19:48:14  15 of 19 PASS not_null_stg_match_results_match_id .............................. [\u001b[32mPASS\u001b[0m in 0.51s]\n\u001b[0m19:48:14  18 of 19 START test unique_fct_underdog_feature_mart_match_id .................. [RUN]\n\u001b[0m19:48:14  18 of 19 PASS unique_fct_underdog_feature_mart_match_id ........................ [\u001b[32mPASS\u001b[0m in 0.15s]\n\u001b[0m19:48:14  19 of 19 START test unique_stg_match_results_match_id .......................... [RUN]\n\u001b[0m19:48:14  16 of 19 PASS relationships_fct_underdog_feature_mart_away_team__away_team__ref_stg_match_results_  [\u001b[32mPASS\u001b[0m in 0.70s]\n\u001b[0m19:48:14  17 of 19 PASS relationships_fct_underdog_feature_mart_home_team__home_team__ref_stg_match_results_  [\u001b[32mPASS\u001b[0m in 0.61s]\n\u001b[0m19:48:15  19 of 19 PASS unique_stg_match_results_match_id ................................ [\u001b[32mPASS\u001b[0m in 0.60s]\n\u001b[0m19:48:34  1 of 19 PASS assert_feature_temporal_integrity ................................. [\u001b[32mPASS\u001b[0m in 22.02s]\n\u001b[0m19:48:35  \n\u001b[0m19:48:35  Finished running 19 data tests in 0 hours 0 minutes and 22.28 seconds (22.28s).\n\u001b[0m19:48:35  \n\u001b[0m19:48:35  \u001b[32mCompleted successfully\u001b[0m\n\u001b[0m19:48:35  \n\u001b[0m19:48:35  Done. PASS=19 WARN=0 ERROR=0 SKIP=0 TOTAL=19\n"
+    }
+  },
+  "feature_mart": {
+    "records": 49413,
+    "ranked_records": 23697,
+    "column_count": 29
+  },
+  "postgres_query": {
+    "runs": 20,
+    "median_ms": 8.740600009332411,
+    "execution_ms": 12.693,
+    "shared_hit_blocks": 1650
+  },
+  "data_quality": {
+    "null_required": 0,
+    "duplicate_match_ids": 0,
+    "missing_rank_features": 25716,
+    "invalid_values_or_timestamps": 0,
+    "temporal_leakage": 0,
+    "stale_source": 0
+  }
+}

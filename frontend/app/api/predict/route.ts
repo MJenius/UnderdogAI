@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { gatewayFetch } from "@/lib/gateway";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -8,21 +9,18 @@ export async function GET(request: Request) {
   if (!home || !away) {
     return NextResponse.json({ error: "Missing home or away parameters" }, { status: 400 });
   }
-  const gatewayUrl = process.env.GATEWAY_URL || "http://localhost:8000";
-  let targetUrl = `${gatewayUrl}/api/v1/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
+  let targetUrl = `/api/v1/predict?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}`;
   if (year) {
     targetUrl += `&year=${encodeURIComponent(year)}`;
   }
   try {
-    const res = await fetch(targetUrl, {
-      cache: "no-store",
-    });
+    const res = await gatewayFetch(targetUrl, {}, request.headers.get("x-request-id"));
     if (!res.ok) {
       return NextResponse.json({ error: "Failed to fetch prediction" }, { status: res.status });
     }
     const data = await res.json();
     return NextResponse.json(data);
   } catch {
-    return NextResponse.json({ error: "Internal Gateway Connection Error" }, { status: 500 });
+    return NextResponse.json({ error: "Gateway temporarily unavailable" }, { status: 503 });
   }
 }

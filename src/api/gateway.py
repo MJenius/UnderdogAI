@@ -5,12 +5,19 @@ import json
 import glob
 import math
 import csv
+from collections import Counter
+from contextlib import asynccontextmanager, closing
+from threading import Lock, Thread
+from typing import Annotated, Literal
+
 import psycopg2
 import redis
 import logging
 import time
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from confluent_kafka import Producer
 import grpc
 from concurrent import futures
@@ -20,44 +27,240 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "p
 import simulation_pb2
 import simulation_pb2_grpc
 
-app = FastAPI()
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("underdog.gateway")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    if os.getenv("GRPC_ENABLED", "true").lower() == "true":
+        Thread(target=run_grpc_server, daemon=True).start()
+    yield
+    if kafka_producer is not None:
+        kafka_producer.flush(timeout=5)
+    if grpc_server is not None:
+        grpc_server.stop(grace=5)
+
+
+app = FastAPI(title="UnderdogAI Gateway", version="1.0.0", lifespan=lifespan)
+METRIC_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
+request_counts = Counter()
+request_duration_sums = Counter()
+request_duration_buckets = Counter()
+metrics_lock = Lock()
+
+
+def _positive_env(name, default):
+    try:
+        return max(1, int(os.getenv(name, default)))
+    except ValueError:
+        return default
+
+
+PREDICTION_CACHE_TTL = _positive_env("PREDICTION_CACHE_TTL_SECONDS", 30)
+PREDICTION_CACHE_SIZE = _positive_env("PREDICTION_CACHE_SIZE", 1024)
+# ponytail: per-replica cache; move predictions to Redis only if coordinated invalidation is required.
+prediction_cache = {}
+prediction_cache_hits = 0
+prediction_cache_misses = 0
+prediction_cache_lock = Lock()
+
+
+def clear_prediction_cache():
+    global prediction_cache_hits, prediction_cache_misses
+    with prediction_cache_lock:
+        prediction_cache.clear()
+        prediction_cache_hits = prediction_cache_misses = 0
+
+
+def get_cached_prediction(key):
+    global prediction_cache_hits, prediction_cache_misses
+    now = time.monotonic()
+    with prediction_cache_lock:
+        entry = prediction_cache.get(key)
+        if entry and entry[0] > now:
+            prediction_cache_hits += 1
+            return entry[1]
+        if entry:
+            del prediction_cache[key]
+        prediction_cache_misses += 1
+    return None
+
+
+def cache_prediction(key, result):
+    with prediction_cache_lock:
+        if len(prediction_cache) >= PREDICTION_CACHE_SIZE:
+            prediction_cache.pop(next(iter(prediction_cache)))
+        prediction_cache[key] = (time.monotonic() + PREDICTION_CACHE_TTL, result)
 
 @app.middleware("http")
 async def logging_middleware(request: Request, call_next):
-    request_id = str(uuid.uuid4())
-    start_time = time.time()
-    
-    response = await call_next(request)
-    
-    elapsed_ms = (time.time() - start_time) * 1000
+    supplied_id = request.headers.get("x-request-id", "").strip()
+    request_id = supplied_id[:128] if supplied_id else str(uuid.uuid4())
+    start_time = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("unhandled request error", extra={"request_id": request_id})
+        response = JSONResponse({"detail": "Internal server error"}, status_code=500)
+
+    elapsed = time.perf_counter() - start_time
+    route = request.scope.get("route")
+    endpoint = getattr(route, "path", request.url.path)
+    metric_key = (request.method, endpoint, response.status_code)
+    with metrics_lock:
+        request_counts[metric_key] += 1
+        request_duration_sums[(request.method, endpoint)] += elapsed
+        for bucket in METRIC_BUCKETS:
+            if elapsed <= bucket:
+                request_duration_buckets[(request.method, endpoint, bucket)] += 1
+
     log_entry = {
         "request_id": request_id,
         "method": request.method,
-        "endpoint": request.url.path,
+        "endpoint": endpoint,
         "status": response.status_code,
-        "latency_ms": round(elapsed_ms, 2)
+        "latency_ms": round(elapsed * 1000, 2)
     }
-    print(json.dumps(log_entry))
-    
+    logger.info(json.dumps(log_entry))
     response.headers["X-Request-ID"] = request_id
     return response
 
+
 class TournamentRequest(BaseModel):
-    tournament_year: int
-    simulation_runs: int
-    progression_mode: str
+    tournament_year: int = Field(ge=1930, le=2100)
+    simulation_runs: int = Field(ge=1, le=1_000_000)
+    progression_mode: Literal[
+        "winner", "reach_knockouts", "reach_round_of_16",
+        "reach_quarterfinals", "reach_semifinals", "reach_finals"
+    ]
 
 import src.models.inference as inference
 import src.models.shootout_resilience as shootout_mod
 import src.models.tournament_weights as tournament_weights
 
+client_lock = Lock()
+redis_client = None
+kafka_producer = None
+
+
+def get_redis_client():
+    global redis_client
+    with client_lock:
+        if redis_client is None:
+            redis_client = redis.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", 6379)),
+                password=os.getenv("REDIS_PASSWORD") or None,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=2,
+                health_check_interval=30,
+            )
+    return redis_client
+
+
+def get_kafka_producer():
+    global kafka_producer
+    with client_lock:
+        if kafka_producer is None:
+            kafka_producer = Producer({
+                "bootstrap.servers": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+                "enable.idempotence": True,
+                "acks": "all",
+                "message.timeout.ms": 5000,
+            })
+    return kafka_producer
+
+
+def enqueue_simulation(task_id, event):
+    r = get_redis_client()
+    with r.pipeline(transaction=True) as pipe:
+        pipe.set(f"task:{task_id}:progress", "0.0", ex=3600)
+        pipe.set(f"task:{task_id}:status", "PENDING", ex=3600)
+        pipe.execute()
+    producer = get_kafka_producer()
+    producer.produce("underdog_simulation_tasks", key=task_id, value=json.dumps(event))
+    if producer.flush(timeout=5.0):
+        r.set(f"task:{task_id}:status", "ERROR", ex=3600)
+        raise TimeoutError("simulation queue delivery timed out")
+
+
 def get_db_connection():
     return inference.get_db_connection()
 
-@app.get("/api/v1/predict")
-def predict_endpoint(home: str, away: str, year: int = None):
+
+@app.get("/health/live", include_in_schema=False)
+def liveness_endpoint():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+def readiness_endpoint():
+    checks = {"postgres": False, "redis": False, "kafka": False}
     try:
-        result = inference.compute_probabilities(home, away, year)
+        with closing(inference.get_db_connection()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+        checks["postgres"] = True
+    except Exception:
+        pass
+    try:
+        checks["redis"] = bool(get_redis_client().ping())
+    except Exception:
+        pass
+    try:
+        get_kafka_producer().list_topics(timeout=1)
+        checks["kafka"] = True
+    except Exception:
+        pass
+    status = 200 if checks["postgres"] else 503
+    return JSONResponse({"status": "ready" if status == 200 else "not_ready", "checks": checks}, status_code=status)
+
+
+@app.get("/metrics", include_in_schema=False, response_class=PlainTextResponse)
+def metrics_endpoint():
+    lines = ["# HELP underdog_http_requests_total HTTP requests.",
+             "# TYPE underdog_http_requests_total counter"]
+    with metrics_lock:
+        for (method, endpoint, status), count in sorted(request_counts.items()):
+            lines.append(f'underdog_http_requests_total{{method="{method}",endpoint="{endpoint}",status="{status}"}} {count}')
+        lines.extend(("# HELP underdog_http_request_duration_seconds HTTP request latency.",
+                      "# TYPE underdog_http_request_duration_seconds histogram"))
+        route_totals = Counter()
+        for (method, endpoint, _status), count in request_counts.items():
+            route_totals[(method, endpoint)] += count
+        for method, endpoint in sorted(route_totals):
+            for bucket in METRIC_BUCKETS:
+                count = request_duration_buckets[(method, endpoint, bucket)]
+                lines.append(f'underdog_http_request_duration_seconds_bucket{{method="{method}",endpoint="{endpoint}",le="{bucket}"}} {count}')
+            count = route_totals[(method, endpoint)]
+            total = request_duration_sums[(method, endpoint)]
+            lines.append(f'underdog_http_request_duration_seconds_bucket{{method="{method}",endpoint="{endpoint}",le="+Inf"}} {count}')
+            lines.append(f'underdog_http_request_duration_seconds_sum{{method="{method}",endpoint="{endpoint}"}} {total}')
+            lines.append(f'underdog_http_request_duration_seconds_count{{method="{method}",endpoint="{endpoint}"}} {count}')
+    with prediction_cache_lock:
+        hits, misses = prediction_cache_hits, prediction_cache_misses
+    lines.extend(("# TYPE underdog_prediction_cache_hits_total counter",
+                  f"underdog_prediction_cache_hits_total {hits}",
+                  "# TYPE underdog_prediction_cache_misses_total counter",
+                  f"underdog_prediction_cache_misses_total {misses}"))
+    return "\n".join(lines) + "\n"
+
+@app.get("/api/v1/predict")
+async def predict_endpoint(
+    home: Annotated[str, Query(min_length=1, max_length=100)],
+    away: Annotated[str, Query(min_length=1, max_length=100)],
+    year: Annotated[int | None, Query(ge=1872, le=2100)] = None,
+):
+    try:
+        key = (home.strip(), away.strip(), year)
+        if not key[0] or not key[1]:
+            raise HTTPException(status_code=422, detail="Team names cannot be blank")
+        result = get_cached_prediction(key)
+        if result is None:
+            result = await run_in_threadpool(inference.compute_probabilities, *key)
+            cache_prediction(key, result)
         h_win, a_win, draw, u_score, risk, narrative, h_form, a_form, h2h = result[:9]
         shootout_h = result[9] if len(result) > 9 else 0.5
         shootout_a = result[10] if len(result) > 10 else 0.5
@@ -80,8 +283,13 @@ def predict_endpoint(home: str, away: str, year: int = None):
             "momentum_away": momentum_a,
             "bogey_team_flag": bogey
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except psycopg2.Error:
+        raise HTTPException(status_code=503, detail="Prediction data is temporarily unavailable")
+    except Exception:
+        logger.exception("prediction failed")
+        raise HTTPException(status_code=500, detail="Prediction failed")
 
 @app.get("/api/v1/features")
 def features_endpoint(team: str, year: int = None):
@@ -194,33 +402,27 @@ def dark_horses_endpoint(year: int):
 @app.post("/api/v1/simulate", status_code=202)
 def simulate_endpoint(payload: TournamentRequest):
     task_id = str(uuid.uuid4())
-    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     try:
-        r_host = os.getenv("REDIS_HOST", "localhost")
-        r_port = int(os.getenv("REDIS_PORT", 6379))
-        r = redis.Redis(host=r_host, port=r_port, decode_responses=True)
-        r.set(f"task:{task_id}:progress", "0.0", ex=3600)
-        r.set(f"task:{task_id}:status", "PENDING", ex=3600)
-        producer = Producer({"bootstrap.servers": bootstrap_servers})
         event = {
             "task_id": task_id,
             "tournament_year": payload.tournament_year,
             "simulation_runs": payload.simulation_runs,
             "progression_mode": payload.progression_mode
         }
-        producer.produce("underdog_simulation_tasks", key=task_id, value=json.dumps(event))
-        producer.flush(timeout=5.0)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        enqueue_simulation(task_id, event)
+    except Exception:
+        logger.exception("simulation enqueue failed", extra={"request_id": task_id})
+        raise HTTPException(status_code=503, detail="Simulation queue is temporarily unavailable")
     return {"task_id": task_id}
 
 @app.get("/api/v1/simulate/status/{task_id}")
-def simulate_status_endpoint(task_id: str):
-    r_host = os.getenv("REDIS_HOST", "localhost")
-    r_port = int(os.getenv("REDIS_PORT", 6379))
+def simulate_status_endpoint(task_id: uuid.UUID):
+    task_id = str(task_id)
     try:
-        r = redis.Redis(host=r_host, port=r_port, decode_responses=True)
+        r = get_redis_client()
         status = r.get(f"task:{task_id}:status")
+        if status is None:
+            raise HTTPException(status_code=404, detail="Simulation task not found")
         if status == "ERROR":
             return {"task_id": task_id, "status": "ERROR"}
         res = r.get(task_id)
@@ -228,9 +430,11 @@ def simulate_status_endpoint(task_id: str):
         progress_val = float(prog) if prog is not None else 0.0
         if res:
             return {"task_id": task_id, "status": "COMPLETED", "result": json.loads(res), "progress": 100.0}
-        return {"task_id": task_id, "status": "PENDING", "progress": progress_val}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"task_id": task_id, "status": status, "progress": progress_val}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=503, detail="Simulation status is temporarily unavailable")
 
 @app.get("/api/v1/fixtures")
 def fixtures_endpoint(year: int):
@@ -450,22 +654,14 @@ class SimulationService(simulation_pb2_grpc.SimulationServiceServicer):
 
     def SimulateTournament(self, request, context):
         task_id = str(uuid.uuid4())
-        bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
         try:
-            r_host = os.getenv("REDIS_HOST", "localhost")
-            r_port = int(os.getenv("REDIS_PORT", 6379))
-            r = redis.Redis(host=r_host, port=r_port, decode_responses=True)
-            r.set(f"task:{task_id}:progress", "0.0", ex=3600)
-            r.set(f"task:{task_id}:status", "PENDING", ex=3600)
-            producer = Producer({"bootstrap.servers": bootstrap_servers})
             event = {
                 "task_id": task_id,
                 "tournament_year": request.tournament_year,
                 "simulation_runs": request.simulation_runs,
                 "progression_mode": request.progression_mode
             }
-            producer.produce("underdog_simulation_tasks", key=task_id, value=json.dumps(event))
-            producer.flush(timeout=5.0)
+            enqueue_simulation(task_id, event)
             return simulation_pb2.SimulationTaskStatus(
                 task_id=task_id,
                 status="PENDING",
@@ -480,9 +676,7 @@ class SimulationService(simulation_pb2_grpc.SimulationServiceServicer):
 
     def GetSimulationStatus(self, request, context):
         try:
-            r_host = os.getenv("REDIS_HOST", "localhost")
-            r_port = int(os.getenv("REDIS_PORT", 6379))
-            r = redis.Redis(host=r_host, port=r_port, decode_responses=True)
+            r = get_redis_client()
             task_id = request.task_id
             status = r.get(f"task:{task_id}:status") or "PENDING"
             progress = float(r.get(f"task:{task_id}:progress") or 0.0)
@@ -543,15 +737,13 @@ class SimulationService(simulation_pb2_grpc.SimulationServiceServicer):
             context.set_details(str(e))
             return simulation_pb2.FixtureListResponse()
 
-def run_grpc_server():
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    simulation_pb2_grpc.add_SimulationServiceServicer_to_server(SimulationService(), server)
-    server.add_insecure_port("[::]:50051")
-    server.start()
-    server.wait_for_termination()
+grpc_server = None
 
-@app.on_event("startup")
-def startup_event():
-    import threading
-    t = threading.Thread(target=run_grpc_server, daemon=True)
-    t.start()
+
+def run_grpc_server():
+    global grpc_server
+    grpc_server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    simulation_pb2_grpc.add_SimulationServiceServicer_to_server(SimulationService(), grpc_server)
+    grpc_server.add_insecure_port("[::]:50051")
+    grpc_server.start()
+    grpc_server.wait_for_termination()

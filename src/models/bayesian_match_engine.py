@@ -12,6 +12,9 @@ import pymc as pm
 import arviz as az
 import mlflow
 import math
+import hashlib
+import subprocess
+import time
 from sklearn.metrics import log_loss
 from scipy.optimize import minimize
 import src.models.inference as inference
@@ -143,7 +146,9 @@ if __name__ == "__main__":
         mlflow.set_experiment("underdog_ai_intelligence")
         
     with model:
+        training_started = time.perf_counter()
         idata = pm.sample(draws=1000, tune=500, chains=2, cores=1, random_seed=42)
+        training_seconds = time.perf_counter() - training_started
         pm.set_data({
             "home_idx": test_home_idx,
             "away_idx": test_away_idx,
@@ -155,7 +160,9 @@ if __name__ == "__main__":
             "observed_home_goals": np.zeros(len(test_df), dtype=int),
             "observed_away_goals": np.zeros(len(test_df), dtype=int)
         })
+        inference_started = time.perf_counter()
         post_pred = pm.sample_posterior_predictive(idata, random_seed=42)
+        inference_seconds = time.perf_counter() - inference_started
         
     home_samples = np.stack(post_pred.posterior_predictive["home_goals"]).reshape(-1, len(test_df))
     away_samples = np.stack(post_pred.posterior_predictive["away_goals"]).reshape(-1, len(test_df))
@@ -338,8 +345,16 @@ if __name__ == "__main__":
             "posterior_log_loss": test_log_loss,
             "brier_calibration_error": brier_score,
             "upset_count": upsets,
-            "upset_rate": upset_rate
+            "upset_rate": upset_rate,
+            "training_seconds": training_seconds,
+            "posterior_predictive_seconds": inference_seconds,
+            "posterior_predictive_rows_per_second": len(test_df) / inference_seconds
         })
+        mlflow.set_tags({
+            "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
+            "dataset_sha256": hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest(),
+        })
+        mlflow.log_dict({"features": ["rank_differential", "rolling_point_velocity_5", "rank_volatility_12m", "neutral"], "train_cutoff": "2022-01-01"}, "lineage.json")
         summary.to_csv("model_summary.csv")
         mlflow.log_artifact("model_summary.csv")
         

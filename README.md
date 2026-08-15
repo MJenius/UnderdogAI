@@ -4,34 +4,133 @@ Decision Intelligence and Predictive Football Analytics Platform designed to ide
 
 ---
 
+## Production Reliability Upgrade
+
+The existing data, model, REST/gRPC, Kafka, Redis, and Next.js architecture is preserved. The production path now adds bounded prediction caching, dependency-aware health checks, Prometheus-format metrics, failure-safe queue processing, frontend timeouts, resilient polling, non-root containers, rolling Kubernetes deployments, and CI/CD image publishing.
+
+```mermaid
+flowchart LR
+    User["Browser"] --> FE["Next.js BFF<br/>5 s upstream timeout"]
+    FE --> API["FastAPI + gRPC<br/>request IDs, validation, metrics"]
+    API --> Cache["Bounded 30 s<br/>prediction cache"]
+    Cache --> Model["Bayesian inference"]
+    Model --> PG["PostgreSQL feature mart<br/>connect + statement timeouts"]
+    API --> Kafka["Kafka<br/>idempotent producer"]
+    Kafka --> Workers["Simulation workers<br/>manual commit + bounded retry"]
+    Workers --> PG
+    Workers --> Redis["Redis<br/>atomic task state/results"]
+    API --> Redis
+    Prometheus["Prometheus-compatible scraper"] -. "/metrics" .-> API
+    K8s["Kubernetes<br/>2 replicas + rolling update + PDB"] -. manages .-> FE
+    K8s -. manages .-> API
+    K8s -. manages .-> Workers
+```
+
+### Reliability and Operations
+
+| Area | Implemented behavior |
+|---|---|
+| API reliability | Validates simulation year/run count/mode, returns safe 503 responses for unavailable dependencies, rejects unknown task IDs with 404, and bounds PostgreSQL connection/statement time. |
+| Caching | Per-replica, thread-safe, 1,024-entry prediction cache with a configurable 30-second TTL; misses remain in the worker thread pool and hits stay on the async request path. |
+| Observability | Structured request logs, caller-provided or generated `X-Request-ID`, Prometheus histogram/counter output at `/metrics`, and dependency state at `/health/ready`. |
+| Fault recovery | Kafka idempotent publishing; worker offsets commit only after Redis atomically stores the result; duplicate completed jobs are ignored; transient jobs retry after 1 s and 2 s before terminal failure. |
+| Frontend | Native 5-second upstream timeout on prediction/simulation routes and tolerance for two consecutive transient status-poll failures. |
+| Deployment | Non-root API/worker/frontend images, Compose health ordering, two-replica frontend/API/worker Kubernetes deployments, rolling updates, startup/readiness/liveness probes, and PodDisruptionBudgets. |
+| CI/CD | Backend lint/tests, frontend lint/production build, four container builds, build cache, and immutable SHA plus `latest` GHCR publication on `main`. |
+
+Configuration knobs:
+
+| Variable | Default | Purpose |
+|---|---:|---|
+| `PREDICTION_CACHE_TTL_SECONDS` | `30` | Prediction freshness window. |
+| `PREDICTION_CACHE_SIZE` | `1024` | Maximum cached prediction keys per API replica. |
+| `POSTGRES_CONNECT_TIMEOUT_SECONDS` | `3` | Database connection deadline. |
+| `POSTGRES_STATEMENT_TIMEOUT_MS` | `5000` | Database statement deadline. |
+| `GATEWAY_TIMEOUT_MS` | `5000` | Next.js-to-FastAPI deadline. |
+| `GRPC_ENABLED` | `true` | Enables the embedded gRPC listener. Set `false` in REST-only tests. |
+
+Health and metrics:
+
+```bash
+curl http://localhost:8000/health/live
+curl http://localhost:8000/health/ready
+curl http://localhost:8000/metrics
+```
+
+`/health/live` only confirms that the process event loop is alive. `/health/ready` returns 503 when PostgreSQL is unavailable and also reports Redis/Kafka state without taking prediction traffic offline when only the asynchronous simulation path is degraded.
+
+### Verified Performance
+
+The committed [benchmark results](benchmarks/results.json) were measured on Windows with Python 3.12.6 against the real Uvicorn/FastAPI HTTP boundary. A deterministic 20 ms inference fixture isolates gateway/cache behavior because PostgreSQL, Redis, Kafka, and Docker were not running locally. The before column is the captured baseline run; the after column is the per-metric median of three final-code runs. These are controlled request-path results, not database end-to-end claims.
+
+| 1,000 requests, concurrency 50 | Before | After | Change |
+|---|---:|---:|---:|
+| Throughput | 352.29 req/s | 553.08 req/s | **+57.00%** |
+| P50 latency | 138.95 ms | 87.32 ms | **-37.16%** |
+| P95 latency | 152.80 ms | 112.84 ms | **-26.15%** |
+| P99 latency | 174.61 ms | 123.77 ms | **-29.12%** |
+| Server CPU time | 2.84 s | 1.64 s | **-42.25%** |
+| Peak server RSS | 86.44 MiB | 77.43 MiB | **-10.42%** |
+| HTTP failures | 0 | 0 | unchanged |
+
+Fault injection verified recovery from two consecutive worker failures in **3.00 seconds** using 1-second and 2-second backoff, with zero offset commits before successful processing. Before the change the worker had zero application retries and automatic offset commits, so the same injected sequence did not have an application recovery path.
+
+Reproduce the checks:
+
+```bash
+pytest -q
+npm --prefix frontend run lint
+npm --prefix frontend run build
+python benchmarks/recovery_test.py
+
+# Terminal 1: controlled inference dependency
+BENCHMARK_INFERENCE_DELAY=0.02 GRPC_ENABLED=false uvicorn benchmarks.fixture_app:app --port 8010
+
+# Terminal 2: add --pid <server-pid> for CPU/RSS collection
+python scripts/load_test.py "http://127.0.0.1:8010/api/v1/predict?home=Brazil&away=France&year=2022" --requests 1000 --concurrency 50 --warmup 20
+```
+
+The backend suite contains **20 passing, zero-skipped tests**. The frontend passes ESLint and the Next.js production build/type-check, generating all 16 application/API routes. `docker compose config --quiet` also validates the full-stack service definition without requiring a running Docker daemon.
+
+### Run the Full Stack
+
+```bash
+docker compose up --build
+```
+
+This starts the frontend (`:3000`), REST API (`:8000`), gRPC (`:50051`), worker, PostgreSQL, Redis, Kafka/Zookeeper, MinIO, and Airflow services. Run the existing ingestion/dbt/model steps below before requesting data-backed predictions.
+
+---
+
 ## Table of Contents
-1. [System Architecture](#system-architecture)
-2. [Key Design Decisions](#key-design-decisions)
-3. [Platform Components](#platform-components)
+1. [Production Reliability Upgrade](#production-reliability-upgrade)
+2. [System Architecture](#system-architecture)
+3. [Key Design Decisions](#key-design-decisions)
+4. [Platform Components](#platform-components)
     - [Data Ingestion & ELT](#1-data-ingestion--elt)
     - [Analytics Engineering (dbt)](#2-analytics-engineering-dbt)
     - [Decision Intelligence Core](#3-decision-intelligence-core)
     - [Microservices Layer](#4-microservices-layer)
-4. [Event-Driven Architecture](#event-driven-architecture)
-5. [Analytics Layer](#analytics-layer)
-6. [Repository Directory Structure](#repository-directory-structure)
-7. [Local Emulation Infrastructure](#local-emulation-infrastructure)
-8. [Containerization](#containerization)
-9. [Kubernetes Deployment (Local)](#kubernetes-deployment-local)
-10. [CI/CD Pipeline](#cicd-pipeline)
-11. [Observability & Structured Logging](#observability--structured-logging)
-12. [Step-by-Step Execution Guide](#step-by-step-execution-guide)
+5. [Event-Driven Architecture](#event-driven-architecture)
+6. [Analytics Layer](#analytics-layer)
+7. [Repository Directory Structure](#repository-directory-structure)
+8. [Local Emulation Infrastructure](#local-emulation-infrastructure)
+9. [Containerization](#containerization)
+10. [Kubernetes Deployment (Local)](#kubernetes-deployment-local)
+11. [CI/CD Pipeline](#cicd-pipeline)
+12. [Observability & Structured Logging](#observability--structured-logging)
+13. [Step-by-Step Execution Guide](#step-by-step-execution-guide)
     - [Prerequisites](#prerequisites)
     - [Step 1: Start Emulated Infrastructure](#step-1-start-emulated-infrastructure)
     - [Step 2: Run Data Ingestion (Airflow)](#step-2-run-data-ingestion-airflow)
     - [Step 3: Run Transformations (dbt)](#step-3-run-transformations-dbt)
     - [Step 4: Train Bayesian & Causal Models](#step-4-train-bayesian--causal-models)
     - [Step 5: Spin up Gateway & Workers](#step-5-spin-up-gateway--workers)
-13. [API Usage & Verification](#api-usage--verification)
+14. [API Usage & Verification](#api-usage--verification)
     - [REST Gateway endpoints](#rest-gateway-endpoints)
     - [gRPC Services](#grpc-services)
-14. [AWS Architecture Mapping](#aws-architecture-mapping)
-15. [Cloud Deployment Mechanics (Terraform)](#cloud-deployment-mechanics-terraform)
+15. [AWS Architecture Mapping](#aws-architecture-mapping)
+16. [Cloud Deployment Mechanics (Terraform)](#cloud-deployment-mechanics-terraform)
 
 ---
 
@@ -310,24 +409,26 @@ GitHub Actions workflow runs on every push and pull request to the `main` branch
 
 ### Pipeline Stages
 
-**[.github/workflows/ci.yml](file:///c:/Users/mjeni/OneDrive/Desktop/Own%20Projects/UnderdogAI/.github/workflows/ci.yml)** defines three automated stages:
+**[.github/workflows/ci.yml](.github/workflows/ci.yml)** defines the automated pipeline:
 
 1. **Lint**: Validates Python code style with `flake8`
    ```bash
    flake8 src/ tests/
    ```
 
-2. **Test**: Runs unit tests with `pytest`
+2. **Test**: Runs deterministic unit/reliability tests with `pytest`
    ```bash
-   pytest --maxfail=1 -v
+   pytest -q
    ```
    - Tests validate team name cleaning, lookup tables, and probability bounds
    - API endpoint responses are tested via `fastapi.testclient.TestClient`
-   - Services include a Postgres and Redis test database for integration tests
+   - Dependency behavior is fault-injected; tests do not silently skip when local services are absent
 
-3. **Build**: Verifies Docker image compilation
-   - Builds `Dockerfile.api`, `Dockerfile.worker`, and `Dockerfile.dbt`
-   - Ensures no build-time errors are introduced
+3. **Frontend**: Runs ESLint, TypeScript checks, and the optimized Next.js build.
+
+4. **Build**: Builds API, worker, dbt, and frontend images in a cached matrix after all checks pass.
+
+5. **Publish**: On `main` pushes only, publishes each image to GHCR with immutable commit-SHA and `latest` tags. Cluster deployment remains environment-owned because this repository has no production cluster credentials.
 
 ### Running Locally
 
@@ -335,12 +436,17 @@ GitHub Actions workflow runs on every push and pull request to the `main` branch
 # Lint
 flake8 src/ tests/
 
-# Tests (requires services running)
-pytest --maxfail=1 -v
+# Tests (no services required)
+pytest -q
+
+# Frontend verification
+npm --prefix frontend run lint
+npm --prefix frontend run build
 
 # Build Docker images
 docker build -f Dockerfile.api -t underdog-api:latest .
 docker build -f Dockerfile.worker -t underdog-worker:latest .
+docker build -f Dockerfile.frontend -t underdog-frontend:latest .
 ```
 
 ---
@@ -362,6 +468,8 @@ The FastAPI middleware injects a unique `X-Request-ID` header into every HTTP re
   "latency_ms": 145.23
 }
 ```
+
+Prometheus-compatible counters and latency histograms are exposed at `/metrics`. Kubernetes scrape annotations discover this endpoint, while `/health/live` and `/health/ready` separate process health from dependency readiness. Prediction cache hits/misses are included in the metrics output.
 
 ### Worker Logging
 
@@ -392,7 +500,7 @@ The simulation worker logs lifecycle events with structured JSON:
 }
 ```
 
-All logs are printed to `stdout` in JSON format, allowing container orchestrators to aggregate, search, and monitor via centralized logging solutions (e.g., ELK stack, Datadog, CloudWatch).
+Logs are emitted as JSON to the container process stream, allowing orchestrators to aggregate, search, and monitor them with the chosen logging backend.
 
 
 

@@ -21,6 +21,14 @@ interface Prediction {
   shootout_resilience_away?: number;
 }
 
+interface TeamFeatures {
+  team: string;
+  rank: number;
+  velocity: number;
+  volatility: number;
+  underdog_score: number;
+}
+
 export default function UpsetMatrix({
   teams,
   year,
@@ -34,8 +42,8 @@ export default function UpsetMatrix({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const [homeFeats, setHomeFeats] = useState<any>(null);
-  const [awayFeats, setAwayFeats] = useState<any>(null);
+  const [homeFeats, setHomeFeats] = useState<TeamFeatures | null>(null);
+  const [awayFeats, setAwayFeats] = useState<TeamFeatures | null>(null);
 
   useEffect(() => {
     if (teams.length > 1) {

@@ -52,7 +52,10 @@ def get_db_connection():
         port=int(os.getenv("POSTGRES_PORT", 5433)),
         database=os.getenv("POSTGRES_DB", "analytical_sandbox"),
         user=os.getenv("POSTGRES_USER", "postgres"),
-        password=os.getenv("POSTGRES_PASSWORD", "postgres")
+        password=os.getenv("POSTGRES_PASSWORD", "postgres"),
+        connect_timeout=int(os.getenv("POSTGRES_CONNECT_TIMEOUT_SECONDS", 3)),
+        application_name="underdogai",
+        options=f"-c statement_timeout={int(os.getenv('POSTGRES_STATEMENT_TIMEOUT_MS', 5000))}",
     )
 
 def get_standard_team_name(name):

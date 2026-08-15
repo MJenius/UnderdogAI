@@ -1,0 +1,12 @@
+.git
+.github
+**/.env*
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+venv
+frontend/node_modules
+frontend/.next
+logs
+airflow/logs
+scratch

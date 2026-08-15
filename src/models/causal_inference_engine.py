@@ -4,6 +4,8 @@ import psycopg2
 import pandas as pd
 import numpy as np
 import mlflow
+import hashlib
+import subprocess
 from dowhy import CausalModel
 
 conn = psycopg2.connect(
@@ -128,9 +130,17 @@ refute_random = model.refute_estimate(
     estimate,
     method_name="random_common_cause"
 )
+refute_subset = model.refute_estimate(
+    identified_estimand,
+    estimate,
+    method_name="data_subset_refuter",
+    subset_fraction=0.8,
+    random_seed=42
+)
 
 placebo_new_effect = float(refute_placebo.new_effect)
 random_new_effect = float(refute_random.new_effect)
+subset_new_effect = float(refute_subset.new_effect)
 
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000"))
 try:
@@ -149,4 +159,10 @@ with mlflow.start_run():
         "average_treatment_effect": ate,
         "refutation_placebo_new_effect": placebo_new_effect,
         "refutation_random_new_effect": random_new_effect
+        ,"refutation_subset_new_effect": subset_new_effect
     })
+    mlflow.set_tags({
+        "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
+        "dataset_sha256": hashlib.sha256(pd.util.hash_pandas_object(df_causal, index=True).values.tobytes()).hexdigest(),
+    })
+    mlflow.log_dict({"treatment": "friendly points >= 1.5", "outcome": "World Cup win", "common_causes": ["team_rank", "opponent_rank", "team_volatility", "opponent_volatility"]}, "causal_lineage.json")

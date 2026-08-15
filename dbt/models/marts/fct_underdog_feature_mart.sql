@@ -1,3 +1,5 @@
+{{ config(materialized='incremental', unique_key='match_id', on_schema_change='fail') }}
+
 with match_rankings as (
     select * from {{ ref('int_match_historical_rankings') }}
 ),
@@ -108,3 +110,6 @@ left join rank_momentum h_mom
 left join rank_momentum a_mom
     on m.away_team = a_mom.country_full
     and m.away_rank_date = a_mom.rank_date
+{% if is_incremental() %}
+where m.match_date > (select coalesce(max(match_date), date '1900-01-01') from {{ this }})
+{% endif %}

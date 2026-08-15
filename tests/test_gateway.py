@@ -1,88 +1,98 @@
-import pytest
-import sys
 import os
-import json
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import uuid
 
+os.environ["GRPC_ENABLED"] = "false"
+
+import pytest
 from fastapi.testclient import TestClient
-from src.api.gateway import app
+
+from src.api import gateway
+
+
+PREDICTION = (0.45, 0.30, 0.25, 0.61, "medium", "test", 1.0, 1.0, 0.0)
 
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    gateway.clear_prediction_cache()
+    with TestClient(gateway.app) as test_client:
+        yield test_client
 
 
-def test_api_predict_endpoint_structure(client):
-    response = client.get("/api/v1/predict?home=Brazil&away=France&year=2022")
-    
-    if response.status_code == 200:
-        data = response.json()
-        
-        assert "home_win_prob" in data
-        assert "away_win_prob" in data
-        assert "draw_prob" in data
-        assert "underdog_signal_score" in data
-        assert "risk_label" in data
-        
-        assert 0.0 <= data["home_win_prob"] <= 1.0
-        assert 0.0 <= data["away_win_prob"] <= 1.0
-        assert 0.0 <= data["draw_prob"] <= 1.0
-    else:
-        pytest.skip(f"API returned {response.status_code}: database may not be available")
+def test_predict_is_cached_and_bounded(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gateway.inference, "compute_probabilities", lambda *args: calls.append(args) or PREDICTION)
+
+    first = client.get("/api/v1/predict?home=Brazil&away=France&year=2022")
+    second = client.get("/api/v1/predict?home=Brazil&away=France&year=2022")
+
+    assert first.status_code == second.status_code == 200
+    assert len(calls) == 1
+    assert 0 <= first.json()["home_win_prob"] <= 1
 
 
-def test_api_features_endpoint_exists(client):
-    response = client.get("/api/v1/features?team=Brazil&year=2022")
-    
-    if response.status_code != 500:
-        assert response.status_code in [200, 404]
-    else:
-        pytest.skip("Database not available")
+def test_predict_failure_does_not_leak_internal_error(client, monkeypatch):
+    monkeypatch.setattr(gateway.inference, "compute_probabilities", lambda *_: 1 / 0)
 
-
-def test_api_teams_endpoint(client):
-    response = client.get("/api/v1/teams?year=2022")
-    
-    if response.status_code == 200:
-        data = response.json()
-        assert isinstance(data, list)
-    else:
-        pytest.skip("Database not available")
-
-
-def test_request_id_header(client):
-    response = client.get("/api/v1/teams?year=2022")
-    
-    assert "x-request-id" in response.headers
-    request_id = response.headers["x-request-id"]
-    
-    assert len(request_id) == 36
-    assert request_id.count('-') == 4
-
-
-def test_simulate_endpoint_returns_task_id(client):
-    payload = {
-        "tournament_year": 2022,
-        "simulation_runs": 100,
-        "progression_mode": "winner"
-    }
-    
-    response = client.post("/api/v1/simulate", json=payload)
-    
-    if response.status_code == 202:
-        data = response.json()
-        assert "task_id" in data
-        assert len(data["task_id"]) == 36
-    else:
-        pytest.skip("Kafka/Redis not available")
-
-
-def test_predict_endpoint_handles_missing_params(client):
     response = client.get("/api/v1/predict?home=Brazil&away=France")
-    
-    if response.status_code == 200:
-        data = response.json()
-        assert "home_win_prob" in data
-    else:
-        pytest.skip("Database not available")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Prediction failed"}
+
+
+def test_request_id_is_preserved(client):
+    response = client.get("/health/live", headers={"x-request-id": "trace-123"})
+
+    assert response.status_code == 200
+    assert response.headers["x-request-id"] == "trace-123"
+
+
+def test_simulation_request_validation_and_enqueue(client, monkeypatch):
+    events = []
+    monkeypatch.setattr(gateway, "enqueue_simulation", lambda task_id, event: events.append((task_id, event)))
+    payload = {"tournament_year": 2022, "simulation_runs": 100, "progression_mode": "winner"}
+
+    response = client.post("/api/v1/simulate", json=payload)
+
+    assert response.status_code == 202
+    assert uuid.UUID(response.json()["task_id"])
+    assert events[0][1]["simulation_runs"] == 100
+    assert client.post("/api/v1/simulate", json={**payload, "simulation_runs": 0}).status_code == 422
+
+
+def test_unknown_simulation_is_404(client, monkeypatch):
+    class Redis:
+        def get(self, _key):
+            return None
+
+    monkeypatch.setattr(gateway, "get_redis_client", Redis)
+    response = client.get(f"/api/v1/simulate/status/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+
+    class RetryingRedis:
+        def get(self, key):
+            if key.endswith(":status"):
+                return "RETRYING"
+            return "50.0" if key.endswith(":progress") else None
+
+    monkeypatch.setattr(gateway, "get_redis_client", RetryingRedis)
+    response = client.get(f"/api/v1/simulate/status/{uuid.uuid4()}")
+    assert response.json()["status"] == "RETRYING"
+
+
+def test_metrics_expose_requests_and_cache(client, monkeypatch):
+    monkeypatch.setattr(gateway.inference, "compute_probabilities", lambda *_: PREDICTION)
+    client.get("/api/v1/predict?home=Brazil&away=France")
+    client.get("/api/v1/predict?home=Brazil&away=France")
+
+    metrics = client.get("/metrics").text
+
+    assert "underdog_http_requests_total" in metrics
+    assert "underdog_http_request_duration_seconds_bucket" in metrics
+    assert "underdog_prediction_cache_hits_total 1" in metrics
+
+
+def test_missing_prediction_parameters_are_rejected(client):
+    assert client.get("/api/v1/predict?home=Brazil").status_code == 422
+    assert client.get("/api/v1/predict?home=%20%20&away=France").status_code == 422

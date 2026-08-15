@@ -6,9 +6,23 @@ import random
 import psycopg2
 import redis
 import uuid
-from confluent_kafka import Consumer, KafkaError
+import time
+from confluent_kafka import Consumer, KafkaError, TopicPartition
 import src.models.inference as inference
 import src.models.shootout_resilience as shootout_mod
+
+
+def recover_or_fail(consumer, r, msg, task_id):
+    attempts = r.incr(f"task:{task_id}:attempts")
+    r.expire(f"task:{task_id}:attempts", 3600)
+    if attempts < 3:
+        r.set(f"task:{task_id}:status", "RETRYING", ex=3600)
+        time.sleep(2 ** (attempts - 1))
+        consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))
+    else:
+        r.set(f"task:{task_id}:status", "ERROR", ex=3600)
+        consumer.commit(message=msg, asynchronous=False)
+    return attempts
 
 def sample_poisson(lam):
     if lam <= 0:
@@ -540,11 +554,21 @@ def main():
     conf = {
         "bootstrap.servers": kafka_servers,
         "group.id": "underdog_simulation_workers",
-        "auto.offset.reset": "earliest"
+        "auto.offset.reset": "earliest",
+        "enable.auto.commit": False,
+        "max.poll.interval.ms": 1800000,
     }
     consumer = Consumer(conf)
     consumer.subscribe(["underdog_simulation_tasks"])
-    r = redis.Redis(host=redis_host, port=redis_port, decode_responses=True)
+    r = redis.Redis(
+        host=redis_host,
+        port=redis_port,
+        password=os.getenv("REDIS_PASSWORD") or None,
+        decode_responses=True,
+        socket_connect_timeout=1,
+        socket_timeout=2,
+        health_check_interval=30,
+    )
     
     log_entry = {
         "worker_id": str(uuid.uuid4()),
@@ -568,6 +592,10 @@ def main():
             year = event["tournament_year"]
             runs = event["simulation_runs"]
             progression_mode = event.get("progression_mode", "")
+
+            if r.get(f"task:{task_id}:status") == "COMPLETED" and r.exists(task_id):
+                consumer.commit(message=msg, asynchronous=False)
+                continue
             
             log_entry = {
                 "request_id": task_id,
@@ -578,12 +606,14 @@ def main():
             print(json.dumps(log_entry))
             
             conn = inference.get_db_connection()
-            teams, team_features = fetch_tournament_teams(conn, year)
-            h2h_biases = inference.precompute_h2h_biases(conn, teams, year)
-            tier_similarity = inference.precompute_tier_similarity(conn, teams, year)
-            groups = reconstruct_groups(teams, conn, year)
-            s_stats = shootout_mod.precompute_shootout_stats(conn, teams, year)
-            conn.close()
+            try:
+                teams, team_features = fetch_tournament_teams(conn, year)
+                h2h_biases = inference.precompute_h2h_biases(conn, teams, year)
+                tier_similarity = inference.precompute_tier_similarity(conn, teams, year)
+                groups = reconstruct_groups(teams, conn, year)
+                s_stats = shootout_mod.precompute_shootout_stats(conn, teams, year)
+            finally:
+                conn.close()
             
             log_entry = {
                 "request_id": task_id,
@@ -598,8 +628,13 @@ def main():
                 intercept, home_adv, home_adv_neutral, beta_diff, beta_vel, beta_vol, beta_rank_prior, runs, year, r, task_id,
                 progression_mode, tier_similarity, h2h_biases, groups, s_stats
             )
-            r.set(task_id, json.dumps(results), ex=3600)
-            r.set(f"task:{task_id}:status", "COMPLETED", ex=3600)
+            with r.pipeline(transaction=True) as pipe:
+                pipe.set(task_id, json.dumps(results), ex=3600)
+                pipe.set(f"task:{task_id}:progress", "100.0", ex=3600)
+                pipe.set(f"task:{task_id}:status", "COMPLETED", ex=3600)
+                pipe.delete(f"task:{task_id}:attempts")
+                pipe.execute()
+            consumer.commit(message=msg, asynchronous=False)
             
             log_entry = {
                 "request_id": task_id,
@@ -610,12 +645,13 @@ def main():
         except Exception as e:
             try:
                 task_id = event["task_id"]
-                r.set(f"task:{task_id}:status", "ERROR", ex=3600)
+                attempts = recover_or_fail(consumer, r, msg, task_id)
                 
                 log_entry = {
                     "request_id": task_id,
                     "event": "simulation_failed",
-                    "reason": str(e)
+                    "reason": str(e),
+                    "attempt": attempts,
                 }
                 print(json.dumps(log_entry))
             except Exception:

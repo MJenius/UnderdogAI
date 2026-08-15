@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: stg_match_results
+    columns:
+      - name: match_id
+        data_tests: [not_null, unique]
+      - name: match_date
+        data_tests: [not_null]
+      - name: home_team
+        data_tests: [not_null]
+      - name: away_team
+        data_tests: [not_null]
+  - name: stg_fifa_rankings
+    columns:
+      - name: country_full
+        data_tests: [not_null]
+      - name: rank_date
+        data_tests: [not_null]
+      - name: rank
+        data_tests: [not_null]
+  - name: fct_underdog_feature_mart
+    columns:
+      - name: match_id
+        data_tests: [not_null, unique]
+      - name: home_team
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_match_results')
+              field: home_team
+      - name: away_team
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_match_results')
+              field: away_team

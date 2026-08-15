@@ -1,0 +1,43 @@
+{
+  "environment": {
+    "date": "2026-08-16",
+    "os": "Windows",
+    "python": "3.12.6",
+    "method": "real HTTP gateway with a controlled 20 ms inference dependency",
+    "requests": 1000,
+    "concurrency": 50,
+    "warmup_requests": 20,
+    "before_trials": 1,
+    "after_trials": 3,
+    "reported_after_statistic": "median of each metric"
+  },
+  "before": {
+    "throughput_rps": 352.29,
+    "latency_ms": {"p50": 138.95, "p95": 152.80, "p99": 174.61},
+    "server_cpu_seconds": 2.84,
+    "peak_rss_mb": 86.44,
+    "failures": 0
+  },
+  "after": {
+    "throughput_rps": 553.08,
+    "latency_ms": {"p50": 87.32, "p95": 112.84, "p99": 123.77},
+    "server_cpu_seconds": 1.64,
+    "peak_rss_mb": 77.43,
+    "failures": 0
+  },
+  "change_percent": {
+    "throughput": 57.00,
+    "p50_latency_reduction": 37.16,
+    "p95_latency_reduction": 26.15,
+    "p99_latency_reduction": 29.12,
+    "server_cpu_time_reduction": 42.25,
+    "peak_rss_reduction": 10.42
+  },
+  "recovery": {
+    "before_automatic_retries": 0,
+    "after_retry_budget": 2,
+    "injected_transient_failures": 2,
+    "recovered": true,
+    "recovery_seconds": 3.00
+  }
+}
