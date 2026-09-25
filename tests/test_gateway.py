@@ -89,6 +89,7 @@ def test_redis_failure_fails_readiness_and_simulation_requests_fast(client, monk
 
     monkeypatch.setattr(gateway, "get_redis_client", UnavailableRedis)
     monkeypatch.setattr(gateway.inference, "get_db_connection", lambda: HealthyConnection())
+    monkeypatch.setattr(gateway, "get_kafka_producer", lambda: HealthyKafka())
     started = time.monotonic()
     ready = client.get("/health/ready")
     submitted = client.post("/api/v1/simulate", json={
