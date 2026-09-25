@@ -5,6 +5,8 @@ import math
 import random
 import psycopg2
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 import uuid
 import time
 from confluent_kafka import Consumer, KafkaError, TopicPartition
@@ -13,15 +15,26 @@ import src.models.shootout_resilience as shootout_mod
 
 
 def recover_or_fail(consumer, r, msg, task_id):
-    attempts = r.incr(f"task:{task_id}:attempts")
-    r.expire(f"task:{task_id}:attempts", 3600)
-    if attempts < 3:
-        r.set(f"task:{task_id}:status", "RETRYING", ex=3600)
-        time.sleep(2 ** (attempts - 1))
-        consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))
-    else:
-        r.set(f"task:{task_id}:status", "ERROR", ex=3600)
-        consumer.commit(message=msg, asynchronous=False)
+    attempts = None
+    delay = 2
+    try:
+        attempts = r.incr(f"task:{task_id}:attempts")
+        r.expire(f"task:{task_id}:attempts", 3600)
+        if attempts < 3:
+            r.set(f"task:{task_id}:status", "RETRYING", ex=3600)
+            delay = 2 ** (attempts - 1)
+        else:
+            # Kafka retains the accepted task. Keep its offset uncommitted and
+            # expose its state while PostgreSQL or another dependency recovers.
+            r.set(f"task:{task_id}:status", "RECOVERABLE")
+            r.set(f"task:{task_id}:attempts", 0, ex=3600)
+            delay = 5
+    except Exception:
+        # Redis is only status/progress storage; it must not cause a later
+        # offset commit to skip this accepted Kafka record.
+        pass
+    time.sleep(delay)
+    consumer.seek(TopicPartition(msg.topic(), msg.partition(), msg.offset()))
     return attempts
 
 def sample_poisson(lam):
@@ -565,8 +578,9 @@ def main():
         port=redis_port,
         password=os.getenv("REDIS_PASSWORD") or None,
         decode_responses=True,
-        socket_connect_timeout=1,
-        socket_timeout=2,
+        retry=Retry(NoBackoff(), 0),
+        socket_connect_timeout=0.5,
+        socket_timeout=0.5,
         health_check_interval=30,
     )
     

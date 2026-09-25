@@ -1,5 +1,5 @@
 {
-  "measured_at": "2026-09-25T12:46:16.674881+00:00",
+  "measured_at": "2026-09-25T13:14:51.437060+00:00",
   "git_commit": "3cf1bb2c4183da09ce6837112a7caacc35839b8d",
   "datasets": {
     "fifa_ranking-2026-01-19.csv": {
@@ -67,60 +67,61 @@
     "postgresql": "15.18"
   },
   "live_fault_findings": {
-    "scope": "Live local Docker services on 2026-09-25; recovery intervals are upper bounds from bounded observation windows.",
+    "scope": "Live local Docker fault injections on 2026-09-25; request latency and recovery windows are direct observations.",
     "cases": [
       {
-        "fault": "kafka_interruption",
-        "readiness_http": 200,
-        "readiness_check": "kafka=false",
-        "simulation_submit_http": 503,
-        "recovery_healthy_within_seconds": 12
-      },
-      {
-        "fault": "worker_crash_restart",
-        "queued_task_completed_after_restart": true,
-        "observed_duplicate_executions": 0
-      },
-      {
-        "fault": "duplicate_task",
-        "completed_task_republished": true,
-        "status_remained_completed": true,
-        "observed_duplicate_executions": 0
-      },
-      {
-        "fault": "redis_unavailability",
-        "readiness_timeout_seconds": 8,
-        "valid_simulation_submit_timeout_seconds": 5,
-        "healthy_after_restart": true
-      },
-      {
-        "fault": "postgres_outage",
+        "fault": "redis_pause",
         "readiness_http": 503,
-        "recovered_healthy_within_seconds": 8
+        "readiness_seconds": 0.511,
+        "simulation_submit_http": 503,
+        "simulation_submit_seconds": 0.508,
+        "task_status_http": 503,
+        "task_status_seconds": 0.515,
+        "readiness_healthy_after_resume": true
       },
       {
-        "fault": "postgres_retry_recovery",
+        "fault": "kafka_pause",
+        "simulation_submit_http": 503,
+        "simulation_submit_seconds": 5.005,
+        "kafka_healthy_after_resume_seconds": 12
+      },
+      {
+        "fault": "worker_stop_restart",
+        "queued_task_id": "f076c5e2-3c8c-4cd0-bb5c-8a9b7c194382",
+        "task_completed_after_restart": true,
+        "completion_observed_within_seconds": 15
+      },
+      {
+        "fault": "duplicate_completed_task",
+        "task_id": "f9ba4296-cafb-41b3-a283-d0b3d5c3fcdb",
+        "republished": true,
+        "status_remained_completed": true,
+        "retry_counter_present": false,
+        "consumer_lag_after_duplicate": 0
+      },
+      {
+        "fault": "postgres_short_pause",
+        "task_id": "3a5c04f3-3513-44fa-9809-7e50bab871d0",
         "status_during_outage": "RETRYING",
-        "attempts_observed": 1,
-        "completed_after_database_recovery": true,
-        "completion_observed_within_seconds": 14.5,
+        "completed_after_database_resume": true,
         "lost_tasks": 0
       },
       {
-        "fault": "postgres_retry_exhaustion",
-        "attempts": 3,
-        "terminal_status": "ERROR",
-        "offset_committed": true,
-        "task_executed": false,
-        "lost_tasks": 1
+        "fault": "postgres_prolonged_pause",
+        "task_id": "f9ba4296-cafb-41b3-a283-d0b3d5c3fcdb",
+        "pause_seconds": 18,
+        "recoverable_state_observed": true,
+        "retried_after_retry_budget": true,
+        "completed_after_database_resume": true,
+        "lost_tasks": 0
       }
     ],
     "aggregate": {
-      "postgres_task_events": 2,
-      "completed_after_recovery": 1,
-      "terminally_failed": 1,
+      "accepted_database_outage_tasks": 2,
+      "completed_after_database_recovery": 2,
       "observed_duplicate_executions": 0,
-      "lost_tasks": 1
+      "silently_lost_tasks": 0,
+      "redis_dependent_requests_bounded_seconds": 0.515
     }
   },
   "evaluation": {

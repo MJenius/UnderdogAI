@@ -15,4 +15,4 @@ COPY --chown=app:app . .
 
 USER app
 
-CMD ["python", "src/workers/simulation_worker.py"]
+CMD ["python", "-m", "src.workers.simulation_worker"]

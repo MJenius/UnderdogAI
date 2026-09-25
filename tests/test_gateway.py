@@ -1,4 +1,5 @@
 import os
+import time
 import uuid
 
 os.environ["GRPC_ENABLED"] = "false"
@@ -79,6 +80,61 @@ def test_unknown_simulation_is_404(client, monkeypatch):
     monkeypatch.setattr(gateway, "get_redis_client", RetryingRedis)
     response = client.get(f"/api/v1/simulate/status/{uuid.uuid4()}")
     assert response.json()["status"] == "RETRYING"
+
+
+def test_redis_failure_fails_readiness_and_simulation_requests_fast(client, monkeypatch):
+    class UnavailableRedis:
+        def ping(self): raise ConnectionError("redis unavailable")
+        def pipeline(self, **_kwargs): raise ConnectionError("redis unavailable")
+
+    monkeypatch.setattr(gateway, "get_redis_client", UnavailableRedis)
+    monkeypatch.setattr(gateway.inference, "get_db_connection", lambda: HealthyConnection())
+    started = time.monotonic()
+    ready = client.get("/health/ready")
+    submitted = client.post("/api/v1/simulate", json={
+        "tournament_year": 2022, "simulation_runs": 10, "progression_mode": "winner"
+    })
+
+    assert ready.status_code == 503
+    assert ready.json()["checks"]["redis"] is False
+    assert submitted.status_code == 503
+    assert submitted.json()["detail"] == "Simulation queue is temporarily unavailable"
+    assert time.monotonic() - started < 1
+
+
+def test_redis_status_request_fails_explicitly_and_readiness_recovers(client, monkeypatch):
+    class ToggleRedis:
+        available = False
+        def ping(self):
+            if not self.available: raise ConnectionError("redis unavailable")
+            return True
+        def get(self, _key):
+            if not self.available: raise ConnectionError("redis unavailable")
+            return "PENDING" if _key.endswith(":status") else None
+
+    redis_client = ToggleRedis()
+    monkeypatch.setattr(gateway, "get_redis_client", lambda: redis_client)
+    monkeypatch.setattr(gateway.inference, "get_db_connection", lambda: HealthyConnection())
+    monkeypatch.setattr(gateway, "get_kafka_producer", lambda: HealthyKafka())
+    task_id = uuid.uuid4()
+
+    assert client.get(f"/api/v1/simulate/status/{task_id}").status_code == 503
+    assert client.get("/health/ready").status_code == 503
+    redis_client.available = True
+    assert client.get(f"/api/v1/simulate/status/{task_id}").status_code == 200
+    assert client.get("/health/ready").status_code == 200
+
+
+class HealthyConnection:
+    def cursor(self): return self
+    def execute(self, *_args): pass
+    def close(self): pass
+    def __enter__(self): return self
+    def __exit__(self, *_args): pass
+
+
+class HealthyKafka:
+    def list_topics(self, **_kwargs): return {}
 
 
 def test_metrics_expose_requests_and_cache(client, monkeypatch):

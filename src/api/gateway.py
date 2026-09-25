@@ -12,6 +12,8 @@ from typing import Annotated, Literal
 
 import psycopg2
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 import logging
 import time
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -153,8 +155,9 @@ def get_redis_client():
                 port=int(os.getenv("REDIS_PORT", 6379)),
                 password=os.getenv("REDIS_PASSWORD") or None,
                 decode_responses=True,
-                socket_connect_timeout=1,
-                socket_timeout=2,
+                retry=Retry(NoBackoff(), 0),
+                socket_connect_timeout=0.5,
+                socket_timeout=0.5,
                 health_check_interval=30,
             )
     return redis_client
@@ -214,7 +217,7 @@ def readiness_endpoint():
         checks["kafka"] = True
     except Exception:
         pass
-    status = 200 if checks["postgres"] else 503
+    status = 200 if checks["postgres"] and checks["redis"] else 503
     return JSONResponse({"status": "ready" if status == 200 else "not_ready", "checks": checks}, status_code=status)
 
 

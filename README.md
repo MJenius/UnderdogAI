@@ -14,13 +14,13 @@ Model splitting is chronological: train before 2018-01-01, validation from 2018-
 
 The generated report is `benchmarks/flagship_report.md`; its machine-readable manifest and feature snapshot remain local/ignored artifacts. The fresh ML run and live failure findings are recorded in [`docs/FINAL_VALIDATION_REPORT.md`](docs/FINAL_VALIDATION_REPORT.md). The historical API performance benchmark below remains historical and was not rerun. Causal output is observational under its adjustment assumptions; placebo, random-common-cause, and subset refuters are checks, not proof of causality.
 
-Fresh model evaluation (2026-09-25; MLflow run `0c4c999edaa84b9da557019a54fac51c`): 17,257 train, 1,564 validation, and 4,876 test matches. Validation log loss **0.8884**, multiclass Brier **0.5227**; test log loss **0.9014**, multiclass Brier **0.5290**. Test macro one-vs-rest ECE is **0.0275** (home win 0.0297, draw 0.0311, away win 0.0216). PyMC reported low effective sample size for some parameters and a potential-energy overflow warning; it ran two chains. The elite calibration heuristic reported 62 violations, so the model is not freeze-ready on calibration grounds.
+Fresh model evaluation (2026-09-25; MLflow run `0c4c999edaa84b9da557019a54fac51c`): 17,257 train, 1,564 validation, and 4,876 test matches. Validation log loss **0.8884**, multiclass Brier **0.5227**; test log loss **0.9014**, multiclass Brier **0.5290**. Test macro one-vs-rest ECE is **0.0275** (home win 0.0297, draw 0.0311, away win 0.0216). PyMC reported low effective sample size for some parameters and a potential-energy overflow warning; it ran two chains. The elite calibration heuristic reported 62 violations. These are documented model-quality limitations: the run is reproducible, but probabilities still need stronger convergence and calibration work before production decision use.
 
 The run used Python 3.14.7 with the model-only pinned stack in `requirements-model.txt`. The exact feature rows are retained as an MLflow artifact; the tracked [`docs/reproducibility_manifest.json`](docs/reproducibility_manifest.json) records run, data, config, and metric identifiers.
 
-Live local failures: Kafka outage caused simulation submission to return 503 and Kafka recovered to healthy in 12 seconds; a queued task completed after worker restart; duplicate publication of an already completed task did not change its completed state. PostgreSQL readiness returned 503 during outage and returned healthy within 8 seconds. A short PostgreSQL pause triggered retry attempt 1 and the task completed within a 14.5-second observation window after recovery. A longer PostgreSQL outage exhausted all three attempts and left one task in terminal `ERROR`. During Redis outage, readiness did not respond within 8 seconds and a valid submit did not respond within 5 seconds. Details and limits are in the final validation report.
+Live local fault checks (2026-09-25) passed against the Compose services. During a paused Redis service, readiness, valid simulation submission, and task-status lookup each returned explicit HTTP 503 in 0.51 seconds; readiness returned healthy after Redis resumed. A Kafka pause returned HTTP 503 for submission; Kafka health recovered within 12 seconds. A queued simulation completed after worker restart, and republishing its completed task left its result `COMPLETED`, with no retry counter and consumer lag returning to zero. A short PostgreSQL pause left the task `RETRYING`; after the database resumed it completed. An 18-second PostgreSQL pause passed beyond the three-attempt budget: the task visibly entered `RECOVERABLE`, remained on its uncommitted Kafka offset, retried, and completed after PostgreSQL resumed. No accepted task was silently lost in these checks. Kafka's configured retention remains the outer durability limit during an outage that lasts beyond message retention.
 
-The existing data, model, REST/gRPC, Kafka, Redis, and Next.js architecture is preserved. The production path now adds bounded prediction caching, dependency-aware health checks, Prometheus-format metrics, failure-safe queue processing, frontend timeouts, resilient polling, non-root containers, rolling Kubernetes deployments, and CI/CD image publishing.
+The existing data, model, REST/gRPC, Kafka, Redis, and Next.js architecture is preserved. The production path now adds bounded prediction caching, dependency-aware health checks, Prometheus-format metrics, failure-safe queue processing, frontend timeouts, resilient polling, non-root containers, rolling Kubernetes deployments, and CI/CD image publishing. The API and worker Redis clients now fail without retry loops after bounded socket timeouts; worker retry exhaustion records persistent `RECOVERABLE` status and seeks the same Kafka offset until the task succeeds.
 
 ```mermaid
 flowchart LR
@@ -47,7 +47,7 @@ flowchart LR
 | API reliability | Validates simulation year/run count/mode, returns safe 503 responses for unavailable dependencies, rejects unknown task IDs with 404, and bounds PostgreSQL connection/statement time. |
 | Caching | Per-replica, thread-safe, 1,024-entry prediction cache with a configurable 30-second TTL; misses remain in the worker thread pool and hits stay on the async request path. |
 | Observability | Structured request logs, caller-provided or generated `X-Request-ID`, Prometheus histogram/counter output at `/metrics`, and dependency state at `/health/ready`. |
-| Fault recovery | Kafka idempotent publishing; worker offsets commit only after Redis atomically stores the result; duplicate completed jobs are ignored; transient jobs retry after 1 s and 2 s before terminal failure. |
+| Fault recovery | Kafka idempotent publishing; worker offsets commit only after Redis atomically stores the result; duplicate completed jobs are ignored; jobs retry after 1 s and 2 s, then remain `RECOVERABLE` with a 5 s retry delay and uncommitted Kafka offset until successful. |
 | Frontend | Native 5-second upstream timeout on prediction/simulation routes and tolerance for two consecutive transient status-poll failures. |
 | Deployment | Non-root API/worker/frontend images, Compose health ordering, two-replica frontend/API/worker Kubernetes deployments, rolling updates, startup/readiness/liveness probes, and PodDisruptionBudgets. |
 | CI/CD | Backend lint/tests, frontend lint/production build, four container builds, build cache, and immutable SHA plus `latest` GHCR publication on `main`. |
@@ -71,7 +71,7 @@ curl http://localhost:8000/health/ready
 curl http://localhost:8000/metrics
 ```
 
-`/health/live` only confirms that the process event loop is alive. `/health/ready` returns 503 when PostgreSQL is unavailable and also reports Redis/Kafka state without taking prediction traffic offline when only the asynchronous simulation path is degraded.
+`/health/live` only confirms that the process event loop is alive. `/health/ready` returns 503 when PostgreSQL or Redis is unavailable and reports Kafka state. Redis-dependent API operations return explicit 503 responses within the configured socket timeout.
 
 ### Verified Performance
 
@@ -104,7 +104,7 @@ BENCHMARK_INFERENCE_DELAY=0.02 GRPC_ENABLED=false uvicorn benchmarks.fixture_app
 python scripts/load_test.py "http://127.0.0.1:8010/api/v1/predict?home=Brazil&away=France&year=2022" --requests 1000 --concurrency 50 --warmup 20
 ```
 
-The backend suite contains **25 passing, zero-skipped tests** (Python 3.14 environment). Frontend lint completed with zero errors and 7 warnings, and the Next.js production build/type-check passed. Docker Compose configuration validation passed. Airflow ingestion succeeded; dbt full refresh succeeded (7 models) and 5 dbt SQL tests passed.
+The backend suite contains **29 passing, zero-skipped tests** (Python 3.14 environment), including retry exhaustion, prolonged task replay, and Redis failure/recovery regressions. Frontend lint/build and full CI checks were rerun for the freeze pass; final outcomes are recorded in [`docs/FINAL_VALIDATION_REPORT.md`](docs/FINAL_VALIDATION_REPORT.md). Docker Compose configuration validation passed. Airflow ingestion succeeded; dbt full refresh succeeded (7 models) and 5 dbt SQL tests passed.
 
 ### Run the Full Stack
 
