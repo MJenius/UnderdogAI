@@ -6,6 +6,16 @@ Decision Intelligence and Predictive Football Analytics Platform designed to ide
 
 ## Production Reliability Upgrade
 
+### Flagship data-to-decision controls
+
+The reproducibility path is `raw CSV → Airflow ingestion → PostgreSQL raw tables → dbt staging/intermediate models → feature mart → MLflow/model summary → API and worker inference`. `src/data_contracts.py` validates the three landing schemas, required types/ranges/dates and schema order before Airflow opens a database connection or truncates a raw table. dbt retains its `on_schema_change='fail'` mart guard and data tests. CSV bytes, schema fingerprints, relevant config hashes, MLflow run summaries and temporal boundaries are recorded by `benchmarks/flagship_report.py`.
+
+Model splitting is chronological: train before 2018-01-01, validation from 2018-01-01 through 2019-12-31, and test from 2020-01-01 onward. Ranking joins remain as-of the match date. Team-rank priors now use training rows only; test-period coefficient fitting was removed. The posterior predictive test path logs multiclass Brier, log loss and per-outcome reliability bins. It does not yet select/calibrate hyperparameters using the reserved validation rows.
+
+The generated report is `benchmarks/flagship_report.md` with its machine-readable `reproducibility_manifest.json`. These are ignored generated files, like model/data artifacts. `benchmarks/failure_matrix.py` exercises the current worker retry policy with controlled doubles; it is a policy simulation, not an end-to-end Kafka/Redis/Postgres outage test. In this environment it recorded 7 retry recoveries across requested fault labels, zero duplicate executions, and one terminally failed task after the retry budget. Retry sleeps are disabled in that matrix, so it reports configured backoff rather than elapsed recovery time.
+
+Stored MLflow artifacts contain parameter summaries, not per-match outcome probabilities. Therefore current Brier/log-loss/reliability metrics cannot be independently regenerated without a fresh database-backed model run. The historical operational benchmark below remains historical and was not rerun here. Causal output is an observational estimate under its adjustment assumptions; placebo, random-common-cause, and subset refuters are checks, not proof of causality.
+
 The existing data, model, REST/gRPC, Kafka, Redis, and Next.js architecture is preserved. The production path now adds bounded prediction caching, dependency-aware health checks, Prometheus-format metrics, failure-safe queue processing, frontend timeouts, resilient polling, non-root containers, rolling Kubernetes deployments, and CI/CD image publishing.
 
 ```mermaid
@@ -90,7 +100,7 @@ BENCHMARK_INFERENCE_DELAY=0.02 GRPC_ENABLED=false uvicorn benchmarks.fixture_app
 python scripts/load_test.py "http://127.0.0.1:8010/api/v1/predict?home=Brazil&away=France&year=2022" --requests 1000 --concurrency 50 --warmup 20
 ```
 
-The backend suite contains **20 passing, zero-skipped tests**. The frontend passes ESLint and the Next.js production build/type-check, generating all 16 application/API routes. `docker compose config --quiet` also validates the full-stack service definition without requiring a running Docker daemon.
+The backend suite now contains **25 passing, zero-skipped tests** in this run. The frontend previously passed ESLint and the Next.js production build/type-check, generating all 16 application/API routes. `docker compose config --quiet` previously validated the full-stack service definition without requiring a running Docker daemon; neither frontend build nor Compose validation was rerun in this update.
 
 ### Run the Full Stack
 

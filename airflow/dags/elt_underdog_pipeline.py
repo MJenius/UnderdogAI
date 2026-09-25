@@ -6,6 +6,7 @@ import boto3
 from botocore.client import Config
 import psycopg2
 from psycopg2.extras import execute_values
+from src.data_contracts import validate_csv
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
@@ -79,9 +80,9 @@ def ingest_results():
     bootstrap_s3(s3, "landing", "results.csv", "/data/landing/results.csv")
     obj = s3.get_object(Bucket="landing", Key="results.csv")
     csv_data = io.StringIO(obj["Body"].read().decode("utf-8"))
-    reader = csv.DictReader(csv_data)
+    rows = validate_csv("results.csv", csv_data.getvalue())
     records = []
-    for row in reader:
+    for row in rows:
         records.append((
             parse_date(row["date"]),
             row["home_team"],
@@ -125,9 +126,9 @@ def ingest_shootouts():
     bootstrap_s3(s3, "landing", "shootouts.csv", "/data/landing/shootouts.csv")
     obj = s3.get_object(Bucket="landing", Key="shootouts.csv")
     csv_data = io.StringIO(obj["Body"].read().decode("utf-8"))
-    reader = csv.DictReader(csv_data)
+    rows = validate_csv("shootouts.csv", csv_data.getvalue())
     records = []
-    for row in reader:
+    for row in rows:
         records.append((
             parse_date(row["date"]),
             row["home_team"],
@@ -163,9 +164,9 @@ def ingest_fifa_rankings():
     bootstrap_s3(s3, "landing", "fifa_ranking-2026-01-19.csv", "/data/landing/fifa_ranking-2026-01-19.csv")
     obj = s3.get_object(Bucket="landing", Key="fifa_ranking-2026-01-19.csv")
     csv_data = io.StringIO(obj["Body"].read().decode("utf-8"))
-    reader = csv.DictReader(csv_data)
+    rows = validate_csv("fifa_ranking-2026-01-19.csv", csv_data.getvalue())
     records = []
-    for row in reader:
+    for row in rows:
         id_val = None
         if "Unnamed: 0" in row:
             id_val = parse_int(row["Unnamed: 0"])

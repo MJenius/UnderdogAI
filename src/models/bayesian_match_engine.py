@@ -18,6 +18,7 @@ import time
 from sklearn.metrics import log_loss
 from scipy.optimize import minimize
 import src.models.inference as inference
+from src.temporal import split_temporally
 
 def audit_elite_calibration(conn, year):
     query = """
@@ -59,19 +60,22 @@ if __name__ == "__main__":
     teams = sorted(list(set(df["home_team"].unique()) | set(df["away_team"].unique())))
     team_to_idx = {t: i for i, t in enumerate(teams)}
     
+    train_rows, validation_rows, test_rows = split_temporally(
+        df.to_dict("records"), "2018-01-01", "2020-01-01"
+    )
+    train_df = pd.DataFrame(train_rows)
+    validation_df = pd.DataFrame(validation_rows)
+    test_df = pd.DataFrame(test_rows)
+    if train_df.empty or validation_df.empty or test_df.empty:
+        raise ValueError("temporal train, validation, and test windows must all contain matches")
     team_ranks = {}
-    for t in teams:
-        h_r = df[df["home_team"] == t]["home_rank"]
-        a_r = df[df["away_team"] == t]["away_rank"]
-        all_r = pd.concat([h_r, a_r]).dropna()
-        if len(all_r) > 0:
-            team_ranks[t] = all_r.mean()
-        else:
-            team_ranks[t] = 100.0
-    baseline_ranks = np.array([team_ranks[t] for t in teams])
-    
-    train_df = df[df["match_date"] < datetime.date(2022, 1, 1)]
-    test_df = df[df["match_date"] >= datetime.date(2022, 1, 1)]
+    for team in teams:
+        ranks = pd.concat([
+            train_df.loc[train_df["home_team"] == team, "home_rank"],
+            train_df.loc[train_df["away_team"] == team, "away_rank"],
+        ]).dropna()
+        team_ranks[team] = float(ranks.mean()) if len(ranks) else 100.0
+    baseline_ranks = np.array([team_ranks[team] for team in teams])
     
     train_home_idx = train_df["home_team"].map(team_to_idx).values
     train_away_idx = train_df["away_team"].map(team_to_idx).values
@@ -83,7 +87,14 @@ if __name__ == "__main__":
     train_h_vol = train_df["home_rank_volatility_12m"].values.astype(float)
     train_a_vol = train_df["away_rank_volatility_12m"].values.astype(float)
     train_neutral = train_df["neutral"].values.astype(float)
-    
+
+    validation_home_idx = validation_df["home_team"].map(team_to_idx).values
+    validation_away_idx = validation_df["away_team"].map(team_to_idx).values
+    validation_y = np.select(
+        [validation_df["home_score"] > validation_df["away_score"], validation_df["home_score"] == validation_df["away_score"]],
+        [0, 1], default=2,
+    )
+
     test_home_idx = test_df["home_team"].map(team_to_idx).values
     test_away_idx = test_df["away_team"].map(team_to_idx).values
     test_rank_diff = test_df["rank_differential"].values.astype(float)
@@ -150,6 +161,27 @@ if __name__ == "__main__":
         idata = pm.sample(draws=1000, tune=500, chains=2, cores=1, random_seed=42)
         training_seconds = time.perf_counter() - training_started
         pm.set_data({
+            "home_idx": validation_home_idx, "away_idx": validation_away_idx,
+            "h_vel": validation_df["home_rolling_point_velocity_5"].values.astype(float),
+            "a_vel": validation_df["away_rolling_point_velocity_5"].values.astype(float),
+            "h_vol": validation_df["home_rank_volatility_12m"].values.astype(float),
+            "a_vol": validation_df["away_rank_volatility_12m"].values.astype(float),
+            "neutral_flag": validation_df["neutral"].values.astype(float),
+            "observed_home_goals": np.zeros(len(validation_df), dtype=int),
+            "observed_away_goals": np.zeros(len(validation_df), dtype=int),
+        })
+        validation_pred = pm.sample_posterior_predictive(idata, random_seed=42)
+        validation_home = np.stack(validation_pred.posterior_predictive["home_goals"]).reshape(-1, len(validation_df))
+        validation_away = np.stack(validation_pred.posterior_predictive["away_goals"]).reshape(-1, len(validation_df))
+        validation_probs = np.column_stack([
+            np.mean(validation_home > validation_away, axis=0),
+            np.mean(validation_home == validation_away, axis=0),
+            np.mean(validation_home < validation_away, axis=0),
+        ])
+        validation_log_loss = log_loss(validation_y, validation_probs, labels=[0, 1, 2])
+        validation_one_hot = np.eye(3)[validation_y]
+        validation_brier = np.mean(np.sum((validation_probs - validation_one_hot) ** 2, axis=1))
+        pm.set_data({
             "home_idx": test_home_idx,
             "away_idx": test_away_idx,
             "h_vel": test_h_vel,
@@ -187,6 +219,18 @@ if __name__ == "__main__":
     y_true_oh = np.zeros_like(probs)
     y_true_oh[np.arange(len(y_true)), y_true] = 1.0
     brier_score = np.mean(np.sum((probs - y_true_oh) ** 2, axis=1))
+    reliability = []
+    for outcome in range(3):
+        confidence = probs[:, outcome]
+        observed = (y_true == outcome).astype(float)
+        bins = []
+        for low in np.linspace(0, 0.9, 10):
+            mask = (confidence >= low) & (confidence < low + 0.1 if low < 0.9 else confidence <= 1.0)
+            if np.any(mask):
+                bins.append({"lower": round(float(low), 1), "count": int(mask.sum()),
+                             "mean_probability": float(confidence[mask].mean()),
+                             "observed_frequency": float(observed[mask].mean())})
+        reliability.append({"outcome": ["home_win", "draw", "away_win"][outcome], "bins": bins})
     
     upsets = 0
     non_draws = 0
@@ -224,112 +268,6 @@ if __name__ == "__main__":
         password=os.getenv("POSTGRES_PASSWORD", "postgres")
     )
     
-    matches_to_calibrate = []
-    unique_years = test_df["match_date"].apply(lambda d: d.year).unique()
-    for yr in unique_years:
-        yr_df = test_df[test_df["match_date"].apply(lambda d: d.year) == yr]
-        yr_teams = list(set(yr_df["home_team"].unique()) | set(yr_df["away_team"].unique()))
-        h2h_biases = inference.precompute_h2h_biases(conn, yr_teams, yr)
-        tier_similarity = inference.precompute_tier_similarity(conn, yr_teams, yr)
-        team_features = {}
-        for t in yr_teams:
-            team_features[t] = inference.get_team_features(conn, t, yr)
-            
-        for idx, row in yr_df.iterrows():
-            h = row["home_team"]
-            a = row["away_team"]
-            h_score = int(row["home_score"])
-            a_score = int(row["away_score"])
-            
-            h_feats = team_features[h]
-            a_feats = team_features[a]
-            h_rank = h_feats["rank"]
-            a_rank = a_feats["rank"]
-            h_tier = inference.get_tier_from_rank(h_rank)
-            a_tier = inference.get_tier_from_rank(a_rank)
-            
-            h_tier_vel = tier_similarity.get(h, {}).get(a_tier, {}).get("vel", 1.0)
-            h_tier_gm = tier_similarity.get(h, {}).get(a_tier, {}).get("gm", 0.0)
-            a_tier_vel = tier_similarity.get(a, {}).get(h_tier, {}).get("vel", 1.0)
-            a_tier_gm = tier_similarity.get(a, {}).get(h_tier, {}).get("gm", 0.0)
-            
-            h2h_entry = h2h_biases.get((h, a), (0.0, False))
-            if isinstance(h2h_entry, tuple):
-                h2h_val = h2h_entry[0]
-            else:
-                h2h_val = h2h_entry
-            
-            h_std = inference.get_standard_team_name(h)
-            h_fifa = inference.get_fifa_rankings_name(h_std)
-            h_est = team_strengths_mean.get(h_std, team_strengths_mean.get(h_fifa, beta_rank_prior_mean * h_rank))
-            h_str = h_est + 0.5 * h2h_val
-            
-            a_std = inference.get_standard_team_name(a)
-            a_fifa = inference.get_fifa_rankings_name(a_std)
-            a_est = team_strengths_mean.get(a_std, team_strengths_mean.get(a_fifa, beta_rank_prior_mean * a_rank))
-            a_str = a_est - 0.5 * h2h_val
-            
-            conf_weights = {
-                "UEFA": 1.45,
-                "CONMEBOL": 1.40,
-                "CAF": 0.95,
-                "CONCACAF": 0.85,
-                "AFC": 0.75,
-                "OFC": 0.40
-            }
-            h_conf = h_feats.get("conf")
-            h_weight = conf_weights.get(h_conf, 1.0) if h_conf else 1.0
-            h_str = h_str + math.log(h_weight)
-            
-            a_conf = a_feats.get("conf")
-            a_weight = conf_weights.get(a_conf, 1.0) if a_conf else 1.0
-            a_str = a_str + math.log(a_weight)
-            
-            neutral_val = bool(row["neutral"])
-            host_map = {
-                1970: {"Mexico"},
-                2018: {"Russia"},
-                2022: {"Qatar"},
-                2026: {"USA", "Canada", "Mexico"}
-            }
-            hosts = host_map.get(yr, set())
-            home_adv_applied_to_home = (not neutral_val) or (inference.get_fifa_rankings_name(h) in hosts)
-            home_adv_applied_to_away = (inference.get_fifa_rankings_name(a) in hosts)
-            
-            h_adv_val = home_adv_mean if home_adv_applied_to_home else (home_adv_neutral_mean if neutral_val else 0.0)
-            a_adv_val = home_adv_mean if home_adv_applied_to_away else (home_adv_neutral_mean if neutral_val else 0.0)
-            
-            base_h = intercept_mean + h_adv_val + h_str - a_str
-            base_a = intercept_mean + a_adv_val + a_str - h_str
-            
-            matches_to_calibrate.append({
-                "base_h": base_h,
-                "base_a": base_a,
-                "h_tier_vel": h_tier_vel,
-                "h_tier_gm": h_tier_gm,
-                "a_tier_vel": a_tier_vel,
-                "a_tier_gm": a_tier_gm,
-                "home_score": h_score,
-                "away_score": a_score
-            })
-        
-    def neg_log_loss(params):
-        beta_tier_vel, beta_tier_gm = params
-        loss = 0.0
-        for m in matches_to_calibrate:
-            log_lam_h = m["base_h"] + beta_tier_vel * m["h_tier_vel"] + beta_tier_gm * m["h_tier_gm"]
-            log_lam_a = m["base_a"] + beta_tier_vel * m["a_tier_vel"] + beta_tier_gm * m["a_tier_gm"]
-            lam_h = np.exp(log_lam_h)
-            lam_a = np.exp(log_lam_a)
-            loss += -(m["home_score"] * log_lam_h - lam_h) - (m["away_score"] * log_lam_a - lam_a)
-        return loss
-        
-    result_opt = minimize(neg_log_loss, x0=np.array([0.0, 0.0]), method="Nelder-Mead")
-    calibrated_beta_vel, calibrated_beta_vol = result_opt.x
-    
-    summary.at["beta_vel", "mean"] = calibrated_beta_vel
-    summary.at["beta_vol", "mean"] = calibrated_beta_vol
-    
     with mlflow.start_run():
         mlflow.log_params({
             "draws": 1000,
@@ -337,13 +275,17 @@ if __name__ == "__main__":
             "chains": 2,
             "num_teams": len(teams),
             "num_train_samples": len(train_df),
+            "num_validation_samples": len(validation_df),
             "num_test_samples": len(test_df),
-            "calibrated_beta_vel": calibrated_beta_vel,
-            "calibrated_beta_vol": calibrated_beta_vol
+            "train_end_exclusive": "2018-01-01",
+            "validation_end_exclusive": "2020-01-01",
+            "validation_samples_reserved": len(validation_df),
         })
         mlflow.log_metrics({
             "posterior_log_loss": test_log_loss,
-            "brier_calibration_error": brier_score,
+            "multiclass_brier_score": brier_score,
+            "validation_log_loss": validation_log_loss,
+            "validation_multiclass_brier_score": validation_brier,
             "upset_count": upsets,
             "upset_rate": upset_rate,
             "training_seconds": training_seconds,
@@ -354,7 +296,17 @@ if __name__ == "__main__":
             "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
             "dataset_sha256": hashlib.sha256(pd.util.hash_pandas_object(df, index=True).values.tobytes()).hexdigest(),
         })
-        mlflow.log_dict({"features": ["rank_differential", "rolling_point_velocity_5", "rank_volatility_12m", "neutral"], "train_cutoff": "2022-01-01"}, "lineage.json")
+        mlflow.log_dict({
+            "features": ["rank_differential", "rolling_point_velocity_5", "rank_volatility_12m", "neutral"],
+            "train": {"start": str(train_df["match_date"].min()), "end_exclusive": "2018-01-01"},
+            "validation": {"start": "2018-01-01", "end_exclusive": "2020-01-01"},
+            "test": {"start": "2020-01-01", "end": str(test_df["match_date"].max())},
+        }, "lineage.json")
+        mlflow.log_dict({"test": {"multiclass_log_loss": float(test_log_loss), "multiclass_brier_score": float(brier_score),
+                                   "reliability_bins": reliability},
+                         "validation": {"multiclass_log_loss": float(validation_log_loss),
+                                        "multiclass_brier_score": float(validation_brier)}},
+                        "evaluation.json")
         summary.to_csv("model_summary.csv")
         mlflow.log_artifact("model_summary.csv")
         
