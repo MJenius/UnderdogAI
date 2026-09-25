@@ -52,6 +52,7 @@ jobs:
       - name: Run pytest
         env:
           GRPC_ENABLED: "false"
+          PYTHONPATH: .
         run: |
           pytest -q
 
