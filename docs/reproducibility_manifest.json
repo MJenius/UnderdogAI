@@ -1,0 +1,308 @@
+{
+  "measured_at": "2026-09-25T12:46:16.674881+00:00",
+  "git_commit": "3cf1bb2c4183da09ce6837112a7caacc35839b8d",
+  "datasets": {
+    "fifa_ranking-2026-01-19.csv": {
+      "sha256": "1e2300b3af3a09038cd8fe1644fd501f081abc52fad39299b1cdeb35f4b353aa",
+      "rows": 69992,
+      "schema_sha256": "6c7b5b7433ec2abe071b300ee8ae8127ac6757911c56c1c1ec239d3b38e3ad1d"
+    },
+    "results.csv": {
+      "sha256": "8043b32b7ebd7915397154a9b8cca37e86f30b8549b00bbbd41e67a90ebc9b41",
+      "rows": 49477,
+      "schema_sha256": "927af41de2cf910cd6e1e1cec5ea5e5f8e79cf03398b7daa435a3acd32a63b71"
+    },
+    "shootouts.csv": {
+      "sha256": "e52e503badc11021d5d243ddf2288346f63ad028bf8de75ae9cfb72c5475d807",
+      "rows": 678,
+      "schema_sha256": "7bc3ba3ae8252aebb21d0c7606bc42afc0a921ee94c72275cfa7ab942b91c3ed"
+    }
+  },
+  "config_sha256": {
+    "docker-compose.yml": "79dcb657ed549b4b022ff9465f6d21ef96383aa5da01078434ac42aafb94acc7",
+    "dbt\\dbt_project.yml": "1de427794c084006d7f7f535189125e1bec935146db2d053ac486bcbae899422",
+    "src\\models\\bayesian_match_engine.py": "bbc9940feab553665217a09c3c0861856a6dcc15781aaabe5125bc71ade4dec5"
+  },
+  "mlflow_run_id": "0c4c999edaa84b9da557019a54fac51c",
+  "dataset_sha256": "2a94889834ce7f39b1737e93e6ce8a595e981ae95b831f4193fc703f9194b78c",
+  "feature_snapshot": {
+    "path": "mlruns\\1\\0c4c999edaa84b9da557019a54fac51c\\artifacts\\reproducibility\\fresh_feature_dataset.csv",
+    "sha256": "6ea1452c7c728ee4f537bdefdfde2efe2f2581f13bb267a26c3e2902d58e63a9"
+  },
+  "params": {
+    "draws": "1000",
+    "tune": "500",
+    "chains": "2",
+    "num_teams": "193",
+    "num_train_samples": "17257",
+    "num_validation_samples": "1564",
+    "num_test_samples": "4876",
+    "train_end_exclusive": "2018-01-01",
+    "validation_end_exclusive": "2020-01-01",
+    "validation_samples_reserved": "1564"
+  },
+  "metrics": {
+    "posterior_log_loss": 0.9013608355349295,
+    "multiclass_brier_score": 0.5289538214725185,
+    "validation_log_loss": 0.8884158277772137,
+    "validation_multiclass_brier_score": 0.5227308788363172,
+    "upset_count": 854.0,
+    "upset_rate": 0.2301266504985179,
+    "training_seconds": 631.1359641000017,
+    "posterior_predictive_seconds": 1.4812573999988672,
+    "posterior_predictive_rows_per_second": 3291.797900894017
+  },
+  "model_environment": {
+    "python": "3.14.7",
+    "pymc": "6.3.2",
+    "arviz": "1.3.0",
+    "mlflow": "3.16.1",
+    "numpy": "2.5.2",
+    "pandas": "3.0.5",
+    "scikit-learn": "1.9.0",
+    "scipy": "1.18.0",
+    "psycopg2-binary": "2.9.13",
+    "dbt": "1.7.0",
+    "airflow": "2.7.2",
+    "postgresql": "15.18"
+  },
+  "live_fault_findings": {
+    "scope": "Live local Docker services on 2026-09-25; recovery intervals are upper bounds from bounded observation windows.",
+    "cases": [
+      {
+        "fault": "kafka_interruption",
+        "readiness_http": 200,
+        "readiness_check": "kafka=false",
+        "simulation_submit_http": 503,
+        "recovery_healthy_within_seconds": 12
+      },
+      {
+        "fault": "worker_crash_restart",
+        "queued_task_completed_after_restart": true,
+        "observed_duplicate_executions": 0
+      },
+      {
+        "fault": "duplicate_task",
+        "completed_task_republished": true,
+        "status_remained_completed": true,
+        "observed_duplicate_executions": 0
+      },
+      {
+        "fault": "redis_unavailability",
+        "readiness_timeout_seconds": 8,
+        "valid_simulation_submit_timeout_seconds": 5,
+        "healthy_after_restart": true
+      },
+      {
+        "fault": "postgres_outage",
+        "readiness_http": 503,
+        "recovered_healthy_within_seconds": 8
+      },
+      {
+        "fault": "postgres_retry_recovery",
+        "status_during_outage": "RETRYING",
+        "attempts_observed": 1,
+        "completed_after_database_recovery": true,
+        "completion_observed_within_seconds": 14.5,
+        "lost_tasks": 0
+      },
+      {
+        "fault": "postgres_retry_exhaustion",
+        "attempts": 3,
+        "terminal_status": "ERROR",
+        "offset_committed": true,
+        "task_executed": false,
+        "lost_tasks": 1
+      }
+    ],
+    "aggregate": {
+      "postgres_task_events": 2,
+      "completed_after_recovery": 1,
+      "terminally_failed": 1,
+      "observed_duplicate_executions": 0,
+      "lost_tasks": 1
+    }
+  },
+  "evaluation": {
+    "test": {
+      "multiclass_log_loss": 0.9013608355349295,
+      "multiclass_brier_score": 0.5289538214725185,
+      "reliability_bins": [
+        {
+          "outcome": "home_win",
+          "bins": [
+            {
+              "lower": 0.0,
+              "count": 339,
+              "mean_probability": 0.04953244837758112,
+              "observed_frequency": 0.061946902654867256
+            },
+            {
+              "lower": 0.1,
+              "count": 438,
+              "mean_probability": 0.15233904109589042,
+              "observed_frequency": 0.1232876712328767
+            },
+            {
+              "lower": 0.2,
+              "count": 510,
+              "mean_probability": 0.2502725490196079,
+              "observed_frequency": 0.25882352941176473
+            },
+            {
+              "lower": 0.3,
+              "count": 582,
+              "mean_probability": 0.3517852233676976,
+              "observed_frequency": 0.31443298969072164
+            },
+            {
+              "lower": 0.4,
+              "count": 618,
+              "mean_probability": 0.45066343042071194,
+              "observed_frequency": 0.4223300970873786
+            },
+            {
+              "lower": 0.5,
+              "count": 632,
+              "mean_probability": 0.5491075949367089,
+              "observed_frequency": 0.5142405063291139
+            },
+            {
+              "lower": 0.6,
+              "count": 540,
+              "mean_probability": 0.6471398148148149,
+              "observed_frequency": 0.6351851851851852
+            },
+            {
+              "lower": 0.7,
+              "count": 509,
+              "mean_probability": 0.7494734774066798,
+              "observed_frequency": 0.7013752455795678
+            },
+            {
+              "lower": 0.8,
+              "count": 392,
+              "mean_probability": 0.8446224489795918,
+              "observed_frequency": 0.8163265306122449
+            },
+            {
+              "lower": 0.9,
+              "count": 314,
+              "mean_probability": 0.9531496815286624,
+              "observed_frequency": 0.8885350318471338
+            }
+          ]
+        },
+        {
+          "outcome": "draw",
+          "bins": [
+            {
+              "lower": 0.0,
+              "count": 561,
+              "mean_probability": 0.04978163992869875,
+              "observed_frequency": 0.08199643493761141
+            },
+            {
+              "lower": 0.1,
+              "count": 1166,
+              "mean_probability": 0.15640694682675815,
+              "observed_frequency": 0.18181818181818182
+            },
+            {
+              "lower": 0.2,
+              "count": 3120,
+              "mean_probability": 0.2550326923076923,
+              "observed_frequency": 0.2881410256410256
+            },
+            {
+              "lower": 0.3,
+              "count": 29,
+              "mean_probability": 0.3039310344827586,
+              "observed_frequency": 0.27586206896551724
+            }
+          ]
+        },
+        {
+          "outcome": "away_win",
+          "bins": [
+            {
+              "lower": 0.0,
+              "count": 1133,
+              "mean_probability": 0.04789805825242719,
+              "observed_frequency": 0.06443071491615181
+            },
+            {
+              "lower": 0.1,
+              "count": 933,
+              "mean_probability": 0.14968488745980707,
+              "observed_frequency": 0.15969989281886388
+            },
+            {
+              "lower": 0.2,
+              "count": 814,
+              "mean_probability": 0.24871744471744475,
+              "observed_frequency": 0.26535626535626533
+            },
+            {
+              "lower": 0.3,
+              "count": 605,
+              "mean_probability": 0.3490115702479339,
+              "observed_frequency": 0.3239669421487603
+            },
+            {
+              "lower": 0.4,
+              "count": 423,
+              "mean_probability": 0.4489468085106383,
+              "observed_frequency": 0.408983451536643
+            },
+            {
+              "lower": 0.5,
+              "count": 341,
+              "mean_probability": 0.54675073313783,
+              "observed_frequency": 0.5190615835777126
+            },
+            {
+              "lower": 0.6,
+              "count": 248,
+              "mean_probability": 0.6443588709677419,
+              "observed_frequency": 0.6129032258064516
+            },
+            {
+              "lower": 0.7,
+              "count": 191,
+              "mean_probability": 0.7474319371727748,
+              "observed_frequency": 0.7120418848167539
+            },
+            {
+              "lower": 0.8,
+              "count": 84,
+              "mean_probability": 0.8535416666666668,
+              "observed_frequency": 0.8214285714285714
+            },
+            {
+              "lower": 0.9,
+              "count": 104,
+              "mean_probability": 0.9527932692307691,
+              "observed_frequency": 0.9038461538461539
+            }
+          ]
+        }
+      ]
+    },
+    "validation": {
+      "multiclass_log_loss": 0.8884158277772137,
+      "multiclass_brier_score": 0.5227308788363172
+    }
+  },
+  "test_reliability_ece_one_vs_rest": {
+    "home_win": 0.029728662289700464,
+    "draw": 0.03113494667760457,
+    "away_win": 0.021629716981132065
+  },
+  "test_macro_ece": 0.0274977753161457,
+  "limitations": [
+    "Two chains; low effective sample size for some parameters.",
+    "Potential-energy overflow warning during sampling.",
+    "Elite calibration audit reported violations; it is not a reliability metric."
+  ]
+}

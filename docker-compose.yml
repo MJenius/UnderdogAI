@@ -146,11 +146,13 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW_VAR_LANDING_PATH: /data/landing
+      PYTHONPATH: /opt/airflow
       _PIP_ADDITIONAL_REQUIREMENTS: "boto3 psycopg2-binary"
     ports:
       - "8080:8080"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - ./data/landing:/data/landing
@@ -165,9 +167,11 @@ services:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW_VAR_LANDING_PATH: /data/landing
+      PYTHONPATH: /opt/airflow
       _PIP_ADDITIONAL_REQUIREMENTS: "boto3 psycopg2-binary"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
       - ./airflow/logs:/opt/airflow/logs
       - ./airflow/plugins:/opt/airflow/plugins
       - ./data/landing:/data/landing
